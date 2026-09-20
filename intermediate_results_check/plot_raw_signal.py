@@ -41,7 +41,9 @@ for st_idx in state_idx:
     for ax, (name, st_obj) in zip(axes, panels):
         time = st_obj.time(st_idx, freq, p_idx)
         amp = st_obj.amplitude(st_idx, freq, p_idx)
-        ax.plot(time, amp, label=f"State {st_idx} Panel {name}")
+        bench = st_obj.benchmark_amplitude(st_idx, freq, p_idx)
+        scattered = amp-bench
+        ax.plot(time, scattered, label=f"State {st_idx} Panel {name}")
         ax.set_title(f"Panel {name}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Amplitude")
@@ -49,9 +51,8 @@ for st_idx in state_idx:
 
     fig.suptitle(f"Signals for state {st_idx} (freq {freq}, pair {p_idx})")
     fig.tight_layout()
+    plt.show()
 
-plt.clf()
-
-st_123_41 = states(str(mat_file_path("123_41")))
-st_123_41.plot(st_123_41.num_states - 1, DEFAULT_FREQ_INDEX, 2, save_path="state_123_41.svg")
-plt.show()
+st_123_43 = states(str(mat_file_path("103")))
+st_103.plot(20, DEFAULT_FREQ_INDEX, 2, direction=0, save_path="state_123_41_dir1.svg")
+st_103.plot(20, DEFAULT_FREQ_INDEX, 2, direction=1, save_path="state_123_41_dir2.svg")
