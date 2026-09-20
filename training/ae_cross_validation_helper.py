@@ -57,15 +57,13 @@ _drop_kwargs(tf.keras.layers.BatchNormalization, "renorm", "renorm_clipping", "r
 _CompatHeNormal = tf.keras.initializers.HeNormal  
 
 def _predict_dataset(model, ds):
-    '''Runs model.predict over every batch of a datastore, returns concatenated (sHI, reconstruction) arrays.'''
+    '''Runs model.predict over a datastore in one call, returns (sHI, reconstruction) arrays.'''
     shi_idx = model.output_names.index('sHI')
     rec_idx = model.output_names.index('reconstruction')
-    all_shi, all_rec = [], []
-    for x, _ in ds:
-        pred = model.predict(x, verbose=0)
-        all_shi.append(np.asarray(pred[shi_idx]).reshape(x.shape[0], -1))
-        all_rec.append(np.asarray(pred[rec_idx]))
-    return np.concatenate(all_shi, axis=0), np.concatenate(all_rec, axis=0)
+    pred = model.predict(ds, verbose=0)
+    shi = np.asarray(pred[shi_idx])
+    rec = np.asarray(pred[rec_idx])
+    return shi.reshape(shi.shape[0], -1), rec
 
 
 def plot_sHI_cv_fold(fold_model, ds_dict, States_dict, panels, held_out_panel, save_path):
