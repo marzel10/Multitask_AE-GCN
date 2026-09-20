@@ -41,7 +41,9 @@ monotonic the current predictions happen to be, independent of overall model qua
 At the end train and validation datasets are assumed and latent representations and signal reconstructions are ploted.
 """
 
+
 import gc
+import json
 import multiprocessing
 import os
 import sys
@@ -79,7 +81,7 @@ from ae_cross_validation_helper import (
 from create_datastores import prepare_datastores
 from prognostic_criteria import monotonicity_criterion, trendability_criterion, prognosability_criterion
 from config import (
-    K_SPARSE_PENALTY_WEIGHT, CV_PANELS,
+    K_SPARSE_PENALTY_WEIGHT, CV_PANELS, VAL_PANELS,
     BO_RESULTS_DIR, BO_TUNER_DIR, BO_SEARCH_RESULTS_DIR, TEST_RUN_DIR,
     DEFAULT_N_FEATURES, TEST_PANEL, EPOCHS_PER_FOLD_AE, CNN_FIXED_LATENT_DIM, LR, MAX_TRIALS_AE,
 )
@@ -96,11 +98,11 @@ MODEL_TYPE = "CNN_AE"    # used only when MODE == "single"  ("fc_AE" or "CNN_AE"
 HP_COLS = {
     # Fully connected AE has the following HP
     "fc_AE": [
-         "k_sparse_frac", "batch_size", "latent_dim", "drop_rate"
+         "k_sparse_frac", "batch_size", "latent_dim", "drop_rate", "l2_reg"
     ],
     # CNN AE has the following HP
     "CNN_AE": [
-        "k_sparse_frac", "filters_bench", "filters_path",  "batch_size"
+        "k_sparse_frac", "filters_bench", "filters_path",  "batch_size", "l2_reg"
     ],
 }
 
@@ -134,6 +136,10 @@ def get_batch_size_hp(hp):
     return hp.Int("batch_size", min_value=4, max_value=32, step=4)
 
 
+def get_l2_reg_hp(hp):
+    return hp.Float("l2_reg", min_value=1e-5, max_value=1e-2, sampling="log")
+
+
 # ─── Model builder ────────────────────────────────────────────────────────────
 def build_model(hp, model_type="fc_AE"):
 
@@ -141,6 +147,7 @@ def build_model(hp, model_type="fc_AE"):
     latent_dim = CNN_FIXED_LATENT_DIM if model_type == "CNN_AE" else get_latent_dim_hp(hp)
     k_sparse = resolve_k_sparse(get_k_sparse_frac_hp(hp), latent_dim)
     drop_rate = get_drop_rate_hp(hp) if model_type == "fc_AE" else None
+    l2_reg = get_l2_reg_hp(hp)
 
     if model_type == "fc_AE":
         params = {
@@ -149,6 +156,7 @@ def build_model(hp, model_type="fc_AE"):
             "latent_dim": latent_dim,
             "k_sparse": k_sparse,
             "drop_rate": drop_rate,
+            "l2_reg": l2_reg,
         }
         model = build_fc_AE_features(params)
     elif model_type == "CNN_AE":
@@ -159,6 +167,7 @@ def build_model(hp, model_type="fc_AE"):
             "k_sparse": k_sparse,
             "filters_bench": hp.Int("filters_bench", min_value=6, max_value=20, step=2),
             "filters_path": hp.Int("filters_path", min_value=4, max_value=12, step=2),
+            "l2_reg": l2_reg,
         }
         model = build_CNN_AE_features(params)
     else:
@@ -178,11 +187,8 @@ def _collect_sHI(model, ds_dict, panels):
     shi_idx = model.output_names.index("sHI")
     DI = []
     for panel in panels:
-        panel_shi = []
-        for x, _ in ds_dict[panel]:
-            pred = model.predict(x, verbose=0)
-            panel_shi.append(np.asarray(pred[shi_idx]).reshape(-1))
-        DI.append(np.concatenate(panel_shi))
+        pred = model.predict(ds_dict[panel], verbose=0)
+        DI.append(np.asarray(pred[shi_idx]).reshape(-1))
     return DI
 
 
@@ -206,7 +212,8 @@ class MyTuner(kt.BayesianOptimization):
         self.diff_bench = True if model_type == "fc_AE" else False
         self.path_i = path_i
         self.freq = freq
-        self.cv_panels = cv_panels or CV_PANELS
+        self.cv_panels = cv_panels or VAL_PANELS
+        self.train_pannels = CV_PANELS
         self.epochs_per_fold = epochs_per_fold
 
     def run_trial(self, trial, *args, **kwargs):
@@ -225,7 +232,7 @@ class MyTuner(kt.BayesianOptimization):
 
             log_mem(f"trial {trial.trial_id} fold {fold_idx} before prep")
 
-            train_panels = [p for p in self.cv_panels if p != val_panel]
+            train_panels = [p for p in self.train_pannels if p != val_panel]
             print(f"\n[trial {trial.trial_id}] fold {fold_idx+1}/"
                   f"{len(self.cv_panels)} — val panel {val_panel}")
 
@@ -270,7 +277,7 @@ class MyTuner(kt.BayesianOptimization):
             fold_val.append(min(h.get("val_loss", [float("inf")])))
             fold_tr.append(min(h.get("loss", [float("inf")])))
 
-            fold_fitness.append(fitness_objective(model, ds_dict, self.cv_panels))
+            fold_fitness.append(fitness_objective(model, ds_dict, self.train_pannels))
 
             # release graph/memory between folds
             del model, history, train_ds, val_ds, ds_dict, h
@@ -377,7 +384,7 @@ def _append_to_model_database(model_info, results_dir=MODEL_DB_DIR):
     print(f"Updated database at {excel_path}")
 
 # ─── Main optimization routine ────────────────────────────────────────────────
-def run_bayesian_optimization(path_i, freq, model_type="fc_AE", max_trials=MAX_TRIALS_AE, out_dir=None, db_dir=None):
+def run_bayesian_optimization(path_i, freq, model_type="fc_AE", max_trials=MAX_TRIALS_AE, out_dir=None, db_dir=None, do_BO=True):
     """Run Bayesian search, then retrain with the best hyperparameters using the same
     leave-one-out cross-validation loop big_train.py's __main__ runs (see the retrain
     loop below) -- saving/plotting each fold plus an ensemble directly into out_dir.
@@ -393,39 +400,57 @@ def run_bayesian_optimization(path_i, freq, model_type="fc_AE", max_trials=MAX_T
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    t_start = pd.Timestamp.now()
-    tuner = MyTuner(
-        model_building_function,
-        objective=kt.Objective("Objective", direction="max"),
-        max_trials=max_trials,
-        directory=str(BO_TUNER_DIR),
-        project_name="ae",
-        overwrite=True,
-        model_type=model_type,
-        path_i=path_i,
-        freq=freq
-    )
-    tuner.search()
-    t_elapsed = pd.Timestamp.now() - t_start
-    print(f"Bayesian optimization ({model_type}) completed in {t_elapsed}")
-
+    
     date = pd.Timestamp.now().strftime("%Y_%m_%d-%H_%M_%S")
     out_dir = str(BO_SEARCH_RESULTS_DIR / f"Bayesian_{model_type}_{date}") if out_dir is None else out_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    best = tuner.oracle.get_best_trials(1)[0]
-    print("Trial ID:", best.trial_id)
-    print("Objective (mean_fitness - k_sparse_penalty):", best.score)
-    print("Hyperparameters:", best.hyperparameters.values)
-    print("Final val_loss:", best.metrics.get_last_value("mean_val_loss"))
-    print("Final train loss:", best.metrics.get_last_value("mean_train_loss"))
+    if do_BO:
+        t_start = pd.Timestamp.now()
+        tuner = MyTuner(
+            model_building_function,
+            objective=kt.Objective("Objective", direction="max"),
+            max_trials=max_trials,
+            directory=str(BO_TUNER_DIR),
+            project_name="ae",
+            overwrite=True,
+            model_type=model_type,
+            path_i=path_i,
+            freq=freq
+        )
+        tuner.search()
+        t_elapsed = pd.Timestamp.now() - t_start
+        print(f"Bayesian optimization ({model_type}) completed in {t_elapsed}")
 
-    _save_best_trial_details(best, t_elapsed, out_dir)
+
+        best = tuner.oracle.get_best_trials(1)[0]
+        print("Trial ID:", best.trial_id)
+        print("Objective (mean_fitness - k_sparse_penalty):", best.score)
+        print("Hyperparameters:", best.hyperparameters.values)
+        print("Final val_loss:", best.metrics.get_last_value("mean_val_loss"))
+        print("Final train loss:", best.metrics.get_last_value("mean_train_loss"))
+
+        _save_best_trial_details(best, t_elapsed, out_dir)
+
+        train_h, val_h, fitness_h = _collect_loss_histories(tuner)
+        running_best = np.maximum.accumulate(fitness_h) if fitness_h else np.array([])
+        df = _build_trials_dataframe(tuner)
+        print(df.head(10))
 
     # Retrain with the best hyperparameters using leave-one-out cross-validation
-    best_params = best.hyperparameters.values
-    seed = int(np.random.randint(0, 10000))
-    tf.random.set_seed(seed)
+    params_path = TEST_RUN_DIR / f"Multi_path_BO_fixed_freq{freq}" / f"Bayesian_{model_type}_test{TEST_PANEL}_freq{freq}_best_params.json"
+    if do_BO:
+        best_params = best.hyperparameters.values
+        # save the best hyperparameters as a dictionary for other paths
+        params_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(params_path, "w") as f:
+            json.dump(best_params, f, indent=2)
+        print(f"Saved: {params_path}")
+    else:
+        # Load the best hyperparameters found for another path at this freq/model_type
+        with open(params_path, "r") as f:
+            best_params = json.load(f)
+    seed=42
 
     latent_dim = CNN_FIXED_LATENT_DIM if model_type == "CNN_AE" else best_params["latent_dim"]
     final_params = {
@@ -433,6 +458,7 @@ def run_bayesian_optimization(path_i, freq, model_type="fc_AE", max_trials=MAX_T
         "n_features": DEFAULT_N_FEATURES,
         "latent_dim": latent_dim,
         "k_sparse": resolve_k_sparse(best_params["k_sparse_frac"], latent_dim),
+        "l2_reg": best_params["l2_reg"],
     }
     if model_type == "fc_AE":
         final_params["drop_rate"] = best_params["drop_rate"]
@@ -521,23 +547,27 @@ def run_bayesian_optimization(path_i, freq, model_type="fc_AE", max_trials=MAX_T
         save_path=os.path.join(out_dir, "ensemble_sHI.png"),
     )
 
-    train_h, val_h, fitness_h = _collect_loss_histories(tuner)
-    running_best = np.maximum.accumulate(fitness_h) if fitness_h else np.array([])
-    df = _build_trials_dataframe(tuner)
-    print(df.head(10))
-
-    return {
-        "model_type": model_type,
-        "fold_models": fold_entries,
-        "ensemble_model": ensemble_model,
-        "best_params": best_params,
-        "train_h": train_h,
-        "val_h": val_h,
-        "fitness_h": fitness_h,
-        "running_best": running_best,
-        "df": df,
-        "out_dir": out_dir,
-    }
+    if do_BO:
+        return {
+            "model_type": model_type,
+            "fold_models": fold_entries,
+            "ensemble_model": ensemble_model,
+            "best_params": best_params,
+            "train_h": train_h,
+            "val_h": val_h,
+            "fitness_h": fitness_h,
+            "running_best": running_best,
+            "df": df,
+            "out_dir": out_dir,
+        }
+    else:
+        return {
+            "model_type": model_type,
+            "fold_models": fold_entries,
+            "ensemble_model": ensemble_model,
+            "best_params": best_params,
+            "out_dir": out_dir,
+        }
 
 
 # ─── Plotting ─────────────
@@ -561,6 +591,7 @@ def plot_optimization_progress(results, save_path):
         ax.legend()
     fig.tight_layout()
     fig.savefig(save_path)
+    plt.close()
 
 
 def plot_running_best(results, save_path):
@@ -574,6 +605,7 @@ def plot_running_best(results, save_path):
         ax.legend()
     fig.tight_layout()
     fig.savefig(save_path)
+    plt.close()
 
 
 def plot_overfitting(results, save_path):
@@ -593,13 +625,14 @@ def plot_overfitting(results, save_path):
         ax.legend()
     fig.tight_layout()
     fig.savefig(save_path)
+    plt.close()
 
 
 def plot_hp_sensitivity(result, save_path):
     """Per-model HP scatter (HP cols differ per model, so this is single-model)."""
     df = result["df"]
     cols = HP_COLS[result["model_type"]]
-    fig, axes = plt.subplots(1, 4, figsize=(20, 8), squeeze=False)
+    fig, axes = plt.subplots(1, len(cols), figsize=(5 * len(cols), 8), squeeze=False)
     for ax, col in zip(axes.flat, cols):
         ax.scatter(df[col], df["objective"], alpha=0.6,
                    edgecolors="k", linewidths=0.3)
@@ -610,12 +643,13 @@ def plot_hp_sensitivity(result, save_path):
     fig.suptitle(f"HP Sensitivity — {result['model_type']}", fontsize=14)
     fig.tight_layout()
     fig.savefig(save_path)
+    plt.close()
 
 
 def plot_hp_coverage(result, save_path):
     df = result["df"]
     cols = HP_COLS[result["model_type"]]
-    fig, axes = plt.subplots(1, 4, figsize=(20, 8), squeeze=False)
+    fig, axes = plt.subplots(1, len(cols), figsize=(5 * len(cols), 8), squeeze=False)
     for ax, col in zip(axes.flat, cols):
         ax.hist(df[col].dropna(), bins=10, edgecolor="k")
         ax.set_title(col)
@@ -624,6 +658,7 @@ def plot_hp_coverage(result, save_path):
     fig.suptitle(f"Sampled HP Distribution — {result['model_type']}", fontsize=14)
     fig.tight_layout()
     fig.savefig(save_path)
+    plt.close()
 
 
 def plot_all(results):
@@ -643,40 +678,52 @@ def plot_all(results):
 
 
 
-def _run_one_path(path_i, freq_i, mode, model_type, max_trials, folder_name):
+def _run_one_path(path_i, freq_i, mode, model_type, max_trials, folder_name, do_BO):
     """Runs one path's full BO search (all trials/folds) + retrain + plots."""
     out_dir = f"{folder_name}/Bayesian_{model_type}_path{path_i}"
     if mode == "single":
         # set random seed for reproducibility
         tf.random.set_seed(42)
-        results = [run_bayesian_optimization(path_i, freq_i, model_type, max_trials=max_trials, out_dir=out_dir, db_dir=folder_name)]
+        results = [run_bayesian_optimization(path_i, freq_i, model_type, max_trials=max_trials, out_dir=out_dir, db_dir=folder_name, do_BO=do_BO)]
+        
     elif mode == "duo":
         # set random seed for reproducibility
         tf.random.set_seed(42)
         results = [
-            run_bayesian_optimization(path_i, freq_i, "fc_AE",  max_trials=max_trials, out_dir=out_dir, db_dir=folder_name),
-            run_bayesian_optimization(path_i, freq_i, "CNN_AE", max_trials=max_trials, out_dir=out_dir, db_dir=folder_name),
+            run_bayesian_optimization(path_i, freq_i, "fc_AE",  max_trials=max_trials, out_dir=out_dir, db_dir=folder_name, do_BO=do_BO),
+            run_bayesian_optimization(path_i, freq_i, "CNN_AE", max_trials=max_trials, out_dir=out_dir, db_dir=folder_name, do_BO=do_BO),
         ]
     else:
         raise ValueError(f"Unknown MODE: {mode!r}. Use 'single' or 'duo'.")
 
-    plot_all(results)
+    if do_BO:
+        plot_all(results)
 
+def _run_all_paths(FREQ_I, folder_name):
+    for PATH_I in range(0, 28):
+        if FREQ_I == 0 and PATH_I < 17:
+            continue  
+        if PATH_I == 0:  
+            do_BO = True  # run BO for the first path to get best hyperparameters
+        else:
+            do_BO = False  # reuse best hyperparameters for other paths
+        log_mem(f"before path {PATH_I} (parent)")
+        _run_one_path(PATH_I, FREQ_I, MODE, MODEL_TYPE, MAX_TRIALS_AE, folder_name, do_BO)
+        log_mem(f"after path {PATH_I} cleanup (parent)")  # should stay flat -- work happened in the child
 
 def main():
-    
+
+    # Initialize new processes for each frequency to run the optimization
 
     for FREQ_I in range(0, 6):
         folder_name = str(TEST_RUN_DIR / f"Multi_path_BO_fixed_freq{FREQ_I}")
         ctx = multiprocessing.get_context("spawn")
-        for PATH_I in range(0, 28):
-            log_mem(f"before path {PATH_I} (parent)")
-            p = ctx.Process(target=_run_one_path, args=(PATH_I, FREQ_I, MODE, MODEL_TYPE, MAX_TRIALS_AE, folder_name))
-            p.start()
-            p.join()
-            if p.exitcode != 0:
-                raise RuntimeError(f"Subprocess for path {PATH_I} failed with exit code {p.exitcode}")
-            log_mem(f"after path {PATH_I} cleanup (parent)")  # should stay flat -- work happened in the child
+        p = ctx.Process(target=_run_all_paths, args=(FREQ_I, folder_name))
+        p.start()
+        p.join()
+        if p.exitcode != 0:
+            raise RuntimeError(f"Subprocess for frequency {FREQ_I} failed with exit code {p.exitcode}")
+
 
 
 if __name__ == "__main__":
