@@ -41,24 +41,23 @@ def _draw_static_panel(ax, panel_number):
 
     dp = DAMAGE_POINTS.get(panel_number)
     if dp is not None and dp.ndim == 1:
-        ax.scatter(dp[0], dp[1], s=120, color="red", marker="X", zorder=5)
+        ax.scatter(dp[0], dp[1], s=120, color="green", marker="X", zorder=5)
         ax.text(dp[0], dp[1] + 0.008, "Impact",
-                ha="center", va="bottom", fontsize=8, color="red", zorder=6)
+                ha="center", va="bottom", fontsize=8, color="green", zorder=6)
     elif dp is not None and dp.ndim == 2:
         x_min, y_min = dp.min(axis=0)
         x_max, y_max = dp.max(axis=0)
         width, height = x_max - x_min, y_max - y_min
         rect = mpatches.Rectangle(
             (x_min, y_min), width, height,
-            linewidth=1.5, edgecolor="red", facecolor="none", linestyle="--", zorder=5,
+            linewidth=1.5, edgecolor="green", facecolor="none", linestyle="--", zorder=5,
             label="Debond area",
         )
         ax.add_patch(rect)
-    margin = 0.01
+    margin = 0.001
     ax.set_xlim(-margin, PANEL_W + margin)
     ax.set_ylim(-margin, PANEL_H + margin)
     ax.invert_xaxis()
     ax.set_aspect("equal")
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
+    
 
