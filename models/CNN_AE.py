@@ -92,7 +92,7 @@ def build_CNN_AE_features(params):
 	filters_path = params.get("filters_path", 16)
 	latent_dim = params.get("latent_dim", DEFAULT_GCN_FEATURES)
 	k_sparse   = params.get("k_sparse", DEFAULT_K_SPARSE)
-	drop_rate  = params.get("drop_rate", 0.0)
+	drop_rate  = params.get("drop_rate", 0.3)
 	conv_out_h = n_feat//2  # encoder Conv2D output height (padding="valid")
 
 	he     = tf.keras.initializers.HeNormal()
@@ -123,7 +123,8 @@ def build_CNN_AE_features(params):
 	                          kernel_regularizer=reg, name="enc_dense")(x)
 	x = tf.keras.layers.BatchNormalization(name="lat_bn")(x)
 	x = tf.keras.layers.Activation("elu", name="lat_act")(x)
-	
+	x = tf.keras.layers.Dropout(drop_rate, name="enc_dropout")(x)
+
 	z = KSparse(k_sparse, name="latent_space")(x)                # (batch, latent_dim)
 
 	# ── sHI head ─────────────────────────────────────────────────────────
