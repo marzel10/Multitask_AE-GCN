@@ -52,11 +52,8 @@ def _palette_style(i):
     return color, linestyle
 
 
-def _model_and_transform(fold, checkpoints, ensemble_model):
-    '''Model + the normalizing transform its dataset needs (None for the ensemble,
-    which re-normalizes per sub-model internally -- see EnsembleGCN.forward).'''
-    if fold == "ensemble":
-        return ensemble_model, None
+def _model_and_transform(fold, checkpoints):
+    '''Fold's model + the normalizing transform its own dataset needs.'''
     ck = checkpoints[fold]
     mean, std = ck["feature_mean"], ck["feature_std"]
 
@@ -65,6 +62,22 @@ def _model_and_transform(fold, checkpoints, ensemble_model):
         return data
 
     return ck["model"], norm_transform
+
+
+def _ensemble_average(collector, checkpoints, datasets_by_fold, panel, device):
+    results = []
+    for fold, ck in checkpoints.items():
+        model = ck["model"].to(device)
+        mean, std = ck["feature_mean"], ck["feature_std"]
+        ds = datasets_by_fold[fold][panel]
+
+        def norm_transform(data, mean=mean, std=std):
+            data.x = (data.x - mean) / std
+            return data
+
+        ds.transform = norm_transform
+        results.append(collector(model, ds, device))
+    return np.mean(np.stack(results, axis=0), axis=0)
 
 
 def _collect_HI(model, dataset, device):
@@ -102,12 +115,10 @@ def _collect_path_out(model, dataset, device):
     return out_arr[np.argsort(states)]
 
 
-def compute_damage_map_grid(model, datasets, device, n_pixels=DAMAGE_MAP_N_PIXELS):
-    '''{panel: {life_fraction: WCPDI map}} for one (ensemble) model, at the 5 saved
-    states nearest LIFETIME_FRACTIONS. Uses imagining_alghoritm's non-differentiable
-    WCPDI '''
-    model = model.to(device)
-    model.eval()
+def compute_damage_map_grid(checkpoints, datasets_by_fold, device, n_pixels=DAMAGE_MAP_N_PIXELS):
+    '''{panel: {life_fraction: WCPDI map}} averaged over fold sub-models, each evaluated
+    on its own fold-matched dataset (see _ensemble_average), at the 5 saved states nearest
+    LIFETIME_FRACTIONS. Uses imagining_alghoritm's non-differentiable WCPDI.'''
     dA = (PANEL_W * PANEL_H) / n_pixels
     dx = np.sqrt(dA)
     x = np.arange(0, PANEL_W + dx, dx)
@@ -116,26 +127,38 @@ def compute_damage_map_grid(model, datasets, device, n_pixels=DAMAGE_MAP_N_PIXEL
 
     maps = {}
     for panel in PANELS:
-        ds = datasets[panel]
-        ds.transform = None
-        n_states = len(ds)
+        ref_ds = next(iter(datasets_by_fold.values()))[panel]
+        ref_ds.transform = None
+        n_states = len(ref_ds)
         maps[panel] = {}
         for frac in LIFETIME_FRACTIONS:
             state = int(round(frac * (n_states - 1)))
             U_arr = np.zeros_like(X)
-            U(U_arr, (X, Y), panel_number=ds.panel_number, state=state)
-            P_arr = np.zeros_like(X)
-            P(P_arr, (X, Y), state, ds, model)
-            wcpdi = WCPDI(P_arr, U_arr)
-            wcpdi_max = np.nanmax(wcpdi)
-            wcpdi_min = np.nanmin(wcpdi)
-            maps[panel][frac] = (wcpdi - wcpdi_min) / (wcpdi_max - wcpdi_min) if wcpdi_max > wcpdi_min else np.zeros_like(wcpdi)
-            #maps[panel][frac] = wcpdi
+            U(U_arr, (X, Y), panel_number=ref_ds.panel_number, state=state)
+
+            fold_wcpdi = []
+            for fold, ck in checkpoints.items():
+                model = ck["model"].to(device)
+                model.eval()
+                mean, std = ck["feature_mean"], ck["feature_std"]
+                ds = datasets_by_fold[fold][panel]
+
+                def norm_transform(data, mean=mean, std=std):
+                    data.x = (data.x - mean) / std
+                    return data
+
+                ds.transform = norm_transform
+                P_arr = np.zeros_like(X)
+                P(P_arr, (X, Y), state, ds, model)
+                fold_wcpdi.append(WCPDI(P_arr, U_arr))
+
+            wcpdi = np.mean(np.stack(fold_wcpdi, axis=0), axis=0)
+            maps[panel][frac] = wcpdi
             print(f"  [damage map] panel={panel} life={frac:.0%} state={state}: done")
     return maps
 
 
-def compute_all(folders=GCN_FREQ_FOLDERS, raw_features=False):
+def compute_all(folders=GCN_FREQ_FOLDERS, raw_features=False, big_latent=True, type="peak"):
     '''Builds the HI array (fold x freq x panel -> 1-D array, state order), the metrics
     array (freq x path x metric, ensemble's per-path outputs only), and the damage-map
     grids (one per frequency, ensemble model only, panel x lifetime fraction).'''
@@ -167,27 +190,40 @@ def compute_all(folders=GCN_FREQ_FOLDERS, raw_features=False):
                 panel: torch.load(folder / f"gcn_bo_val_{panel}.pt", map_location=device, weights_only=False)
                 for panel in BASE_PANELS
             }
-            ensemble_model = torch.load(ensemble_path, map_location=device, weights_only=False)
 
             if raw_features:
-                datasets = {
-                    panel: features_GraphDataset(root=str(GRAPH_DATA_DIR), panel_number=panel, freq=freq_idx)
+                shared_datasets = {
+                    panel: features_GraphDataset(root=str(GRAPH_DATA_DIR), panel_number=panel, freq=freq_idx, type=type)
                     for panel in PANELS
                 }
+                # no per-fold AE latent space for raw features -- every fold shares the same dataset
+                datasets_by_fold = {fold: shared_datasets for fold in BASE_PANELS}
             else:
-                datasets = {
-                    panel: Panel_GraphDataset(root=str(GRAPH_DATA_DIR), panel_number=panel, freq=freq_idx, big_latent=True)
-                    for panel in PANELS
+                # each leave-one-out fold's model was trained on the AE latent space that
+                # excluded its own val panel -- evaluate it on that same fold-matched space,
+                # not a pooled one (see _ensemble_average).
+                datasets_by_fold = {
+                    fold: {
+                        panel: Panel_GraphDataset(root=str(GRAPH_DATA_DIR), panel_number=panel, freq=freq_idx, big_latent=big_latent, type=type, fold=int(fold))
+                        for panel in PANELS
+                    }
+                    for fold in BASE_PANELS
                 }
 
-            # HI grid data: every fold x every panel.
+            # HI grid data: every fold x every panel. 'ensemble' = per-fold models averaged,
+            # each on its own fold-matched dataset, rather than the wrapped EnsembleGCN on a
+            # single shared input.
             for fold_idx, fold in enumerate(FOLD_KEYS):
-                model, transform = _model_and_transform(fold, checkpoints, ensemble_model)
-                model = model.to(device)
-                for panel_idx, panel in enumerate(PANELS):
-                    ds = datasets[panel]
-                    ds.transform = transform
-                    HI[fold_idx][freq_idx][panel_idx] = _collect_HI(model, ds, device)
+                if fold == "ensemble":
+                    for panel_idx, panel in enumerate(PANELS):
+                        HI[fold_idx][freq_idx][panel_idx] = _ensemble_average(_collect_HI, checkpoints, datasets_by_fold, panel, device)
+                else:
+                    model, transform = _model_and_transform(fold, checkpoints)
+                    model = model.to(device)
+                    for panel_idx, panel in enumerate(PANELS):
+                        ds = datasets_by_fold[fold][panel]
+                        ds.transform = transform
+                        HI[fold_idx][freq_idx][panel_idx] = _collect_HI(model, ds, device)
 
                 # Compute HI metrics (Fitness, Mo, Pr, Tr) for every fold and frequency
                 Mo = monotonicity_criterion(HI[fold_idx][freq_idx][:])
@@ -195,13 +231,11 @@ def compute_all(folders=GCN_FREQ_FOLDERS, raw_features=False):
                 Pr = prognosability_criterion(HI[fold_idx][freq_idx][:])
                 HI_metrics[fold_idx][freq_idx] = [Mo + Tr + Pr, Mo, Pr, Tr]
 
-            # Per-path metrics: ensemble model's per-path node outputs, jointly across panels.
-            ensemble_model = ensemble_model.to(device)
-            path_out = {}
-            for panel in PANELS:
-                ds = datasets[panel]
-                ds.transform = None
-                path_out[panel] = _collect_path_out(ensemble_model, ds, device)
+            # Per-path metrics: ensemble's per-path node outputs (per-fold averaged), jointly across panels.
+            path_out = {
+                panel: _ensemble_average(_collect_path_out, checkpoints, datasets_by_fold, panel, device)
+                for panel in PANELS
+            }
             for path_i in range(N_PATHS):
                 DI = [path_out[panel][:, path_i] for panel in PANELS]
                 Mo = monotonicity_criterion(DI)
@@ -209,10 +243,10 @@ def compute_all(folders=GCN_FREQ_FOLDERS, raw_features=False):
                 Pr = prognosability_criterion(DI)
                 metrics[freq_idx, path_i] = [Mo + Tr + Pr, Mo, Pr, Tr]
 
-            # Damage map grid for this frequency: ensemble model only.
-            damage_maps[freq_idx] = compute_damage_map_grid(ensemble_model, datasets, device)
+            # Damage map grid for this frequency: ensemble (per-fold averaged).
+            damage_maps[freq_idx] = compute_damage_map_grid(checkpoints, datasets_by_fold, device)
 
-            del checkpoints, ensemble_model
+            del checkpoints
         except Exception as e:
             print(f"[{folder_name}] FAILED ({e!r})")
         finally:
@@ -282,12 +316,12 @@ def plot_metrics(metrics, out_dir=OUT_DIR, folders=GCN_FREQ_FOLDERS):
         print(f"Saved: {out_dir / f'{metric_name}_vs_path.svg'}")
 
 
+
 def plot_HI_grid(HI, out_dir=OUT_DIR, folders=GCN_FREQ_FOLDERS, weights=None):
     '''One figure, 7x5 grid of subplots: rows are frequencies (6 raw, labeled with their
     actual value from config.FREQUENCY_MAPPING, + average over frequencies), columns are
     folds (4 leave-one-out folds + ensemble). Each subplot (i, j) has one line per panel
-    (that panel's graph-level HI), plotted against life fraction (state index normalized
-    to [0, 1]).'''
+    (that panel's graph-level HI), plotted against normalized life length (0-1).'''
     out_dir.mkdir(parents=True, exist_ok=True)
     freq_labels = [f"{FREQUENCY_MAPPING[i]} kHz" for i in range(len(folders))] + ["WAE"]
 
@@ -426,13 +460,13 @@ def load_cached(out_dir=OUT_DIR):
     return HI, HI_metrics, metrics, damage_maps
 
 
-def main(recompute=False, folders=GCN_FREQ_FOLDERS, out_dir=OUT_DIR, raw_features=False):
+def main(recompute=False, folders=GCN_FREQ_FOLDERS, out_dir=OUT_DIR, raw_features=False, big_latent=True, type="peak"):
     cached = None if recompute else load_cached(out_dir=out_dir)
     if cached is not None:
         print(f"Loaded cached results from {out_dir}")
         HI, HI_metrics, metrics, damage_maps = cached
     else:
-        HI, HI_metrics, metrics, damage_maps = compute_all(folders=folders, raw_features=raw_features)
+        HI, HI_metrics, metrics, damage_maps = compute_all(folders=folders, raw_features=raw_features, big_latent=big_latent, type=type)
 
         out_dir.mkdir(parents=True, exist_ok=True)
         with open(out_dir / "HI.pkl", "wb") as f:
