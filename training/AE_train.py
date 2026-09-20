@@ -46,10 +46,8 @@ def monotonicity_loss(y_true, y_pred):
     diff = diff +tf.ones(batch_size-1, dtype=tf.float32) *10-  0*tf.random.normal([batch_size-1], mean=0.0, stddev=1.0)  # Shift to ensure positive values for monotonic increase
     diff = tf.pow(diff, 2)  # Square the differences to penalize negative values more heavily
 
-    length = tf.cast(tf.shape(diff)[0], tf.float32)
-  
-    baseline = 10**2 * length
-    loss = tf.reduce_sum(diff) - baseline  # Subtract baseline to allow for some variability without penalty
+    baseline = 10**2
+    loss = tf.reduce_mean(diff) - baseline  # mean (not sum) so the loss scale is independent of batch_size
     return loss
 
 def mse_excl_benchmark(y_true, y_pred):
