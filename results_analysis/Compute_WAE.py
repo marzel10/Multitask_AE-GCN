@@ -18,7 +18,7 @@ from prognostic_criteria import monotonicity_criterion, trendability_criterion, 
 from config import GRAPH_TYPES, FOLD_KEYS, TEST_RUN_DIR
 
 def main():
-    types = GRAPH_TYPES
+    types = GRAPH_TYPES + ["raw"]
     model_dirs = [TEST_RUN_DIR / f"graph_performance_results_{t}" for t in types]
     model_dirs.append(TEST_RUN_DIR / "path_performance_results")
 
@@ -35,11 +35,9 @@ def main():
             f"leaf shapes e.g. {[HI[0][0][p].shape if HI[0][0][p] is not None else None for p in range(len(HI[0][0]))]}")
 
         fitness = HI_metrics[:, :, 0]  # (folds, freq_total)
-        WAE_weights = fitness[:, :-1] / np.sum(fitness, axis=1, keepdims=True)  # (folds, freq_total - 1)
-        WAE_test_weights = HI_test_metrics[:, :-1, 0] / np.sum(HI_test_metrics[:, :-1, 0], axis=1, keepdims=True)  # (folds, freq_total - 1)
-
+        WAE_weights = fitness[:, :-1] / np.sum(fitness[:, :-1], axis=1, keepdims=True)  # (folds, freq_total - 1)
+        
         WAE_HI = np.zeros((len(HI),len(HI[0][0])), dtype=object)  # (folds, panels)
-        WAE_HI_test = np.zeros((len(HI),len(HI[0][0])), dtype=object)  # (folds, panels)
         WAE_HI_metrics = np.zeros((len(HI),HI_metrics.shape[2]), dtype=float)  # (folds, panels, metrics)
         WAE_HI_test_metrics = np.zeros((len(HI),HI_metrics.shape[2]), dtype=float)  # (folds, panels, metrics)
 
@@ -49,10 +47,8 @@ def main():
                     if HI[fold][freq][panel] is not None:
                         if WAE_HI[fold][panel] is None:
                             WAE_HI[fold][panel] = np.zeros_like(HI[fold][freq][panel])
-                            WAE_HI_test[fold][panel] = np.zeros_like(HI[fold][freq][panel])
                         WAE_HI[fold][panel] += WAE_weights[fold][freq] * HI[fold][freq][panel]
-                        WAE_HI_test[fold][panel] += WAE_test_weights[fold][freq] * HI[fold][freq][panel]
-
+                        
             Mo = monotonicity_criterion(WAE_HI[fold])
             Pr = prognosability_criterion(WAE_HI[fold])
             Tr = trendability_criterion(WAE_HI[fold])
@@ -61,13 +57,12 @@ def main():
 
             # compute test metrics for WAE_HI
             l1_23_idx = len(WAE_HI[fold]) - 1
-            Mo_test = monotonicity_criterion(WAE_HI_test[fold], test_mode=True, test_idx=l1_23_idx)
-            Pr_test = prognosability_criterion(WAE_HI_test[fold], test_mode=True, test_idx=l1_23_idx)
-            Tr_test = trendability_criterion(WAE_HI_test[fold])  # trendability does not support test_mode
+            Mo_test = monotonicity_criterion(WAE_HI[fold], test_mode=True, test_idx=l1_23_idx)
+            Pr_test = prognosability_criterion(WAE_HI[fold], test_mode=True, test_idx=l1_23_idx)
+            Tr_test = trendability_criterion(WAE_HI[fold])  # trendability does not support test_mode
             fitness_test = Mo_test + Pr_test + Tr_test
             WAE_HI_test_metrics[fold] = [fitness_test, Mo_test, Pr_test, Tr_test]
-
-
+            
         print(f"Computed WAE_HI: {len(WAE_HI)} folds x {len(WAE_HI[0])} panels, "
             f"leaf shapes e.g. {[WAE_HI[0][p].shape if WAE_HI[0][p] is not None else None for p in range(len(WAE_HI[0]))]}")
 
