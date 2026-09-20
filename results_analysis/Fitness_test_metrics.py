@@ -14,16 +14,17 @@ if str(_PROJECT_ROOT) not in sys.path:
 from graph_performance import PANELS, average_HI_over_frequency
 from Fitness_summary import METRIC_NAMES
 from prognostic_criteria import monotonicity_criterion, trendability_criterion, prognosability_criterion
-from config import BASE_PANELS, FREQUENCY_MAPPING, GRAPH_TYPES, TEST_PANEL, TEST_RUN_DIR, FOLD_KEYS
+from config import  FREQUENCY_MAPPING, GRAPH_TYPES, TEST_PANEL, TEST_RUN_DIR, FOLD_KEYS
 
 
 def main():
-    types = GRAPH_TYPES
+    types = GRAPH_TYPES + ["raw"]
     model_dirs = [TEST_RUN_DIR / f"graph_performance_results_{t}" for t in types]
     model_dirs.append(TEST_RUN_DIR / "path_performance_results")
 
 
     for model_dir in model_dirs:
+        
         HI = np.load(model_dir / "HI.pkl", allow_pickle=True)  # (folds, freq, panels)
 
         HI_test_metrics = np.zeros((len(HI),len(HI[0])+1, 4))  # (fold, freq, metric)
