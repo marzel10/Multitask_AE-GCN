@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from config import TEST_RUN_DIR, GRAPH_TYPES, GRAPH_LABELS, FREQ_LABELS, METRIC_COLUMNS, METRIC_NAMES, OUT_XLSX, OUT_DIR, CUSTOM_PALETTE as PALETTE, _LINESTYLES
+from config import TEST_RUN_DIR, GRAPH_TYPES, GRAPH_LABELS, FREQ_LABELS, FOLD_KEYS, METRIC_COLUMNS, METRIC_NAMES, OUT_XLSX, OUT_DIR, CUSTOM_PALETTE as PALETTE, _LINESTYLES
 
 
 def _palette_style(i):
@@ -40,6 +40,7 @@ def _palette_style(i):
 def _model_dirs():
     dirs = {t: TEST_RUN_DIR / f"graph_performance_results_{t}" for t in GRAPH_TYPES}
     dirs["path"] = TEST_RUN_DIR / "path_performance_results"
+    dirs["raw"] = TEST_RUN_DIR / "graph_performance_results_raw"
     return dirs
 
 
@@ -79,17 +80,44 @@ def load_summary(model_dirs=None, filename="HI_metrics.pkl"):
     return pd.DataFrame(rows)
 
 
-def save_summary(df, out_path=OUT_XLSX):
-    df.to_excel(out_path, index=False)
-    print(f"Saved: {out_path}")
+def load_wae_summary(model_dirs=None, filename="WAE_HI_metrics.pkl"):
+    '''Load `filename` (a (fold, metric) WAE_HI_metrics.pkl produced by Compute_WAE.py)'''
+    model_dirs = model_dirs or _model_dirs()
+    rows = []
+    for model_type, folder in model_dirs.items():
+        metrics_path = folder / filename
+        if not metrics_path.exists():
+            print(f"[{model_type}] no {filename} in {folder}, skipping")
+            continue
+        metrics = np.load(metrics_path, allow_pickle=True)  # (folds, metric)
+
+        for fold_label, fold_stats in zip(FOLD_KEYS, metrics):
+            row = {"model_type": model_type, "fold": fold_label}
+            row.update(zip(METRIC_COLUMNS, fold_stats))
+            rows.append(row)
+        print(f"[{model_type}] loaded {metrics_path}")
+
+    if not rows:
+        raise FileNotFoundError(
+            f"No {filename} found for any model type (looked under {list(model_dirs.values())})"
+        )
+
+    return pd.DataFrame(rows)
+
+
+def save_summary(df, out_path=OUT_XLSX, sheet_name="metrics"):
+    '''Writes `df` as one sheet of out_path, without clobbering the workbook's other sheets.'''
+    mode = "a" if out_path.exists() else "w"
+    kwargs = {"if_sheet_exists": "replace"} if mode == "a" else {}
+    with pd.ExcelWriter(out_path, engine="openpyxl", mode=mode, **kwargs) as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    print(f"Saved: {out_path} [{sheet_name}]")
 
 
 def plot_summary(df, out_dir=OUT_DIR, model_dirs=None, GCN_AE_comp=False, raw_comp=False, test_df=None):
-    '''One figure per metric: metric value vs frequency (6 raw + average, categorical
-    x-axis), one line per model type. If GCN_AE_comp and test_df are both given, each
-    model type also gets a second, dashed line from test_df (the test-panel-only
-    metrics from test_metrics.py's HI_test_metrics.pkl), same color, so the overall
-    and test-only performance of each model are directly comparable.'''
+    '''One figure per metric: metric value vs frequency, one line per model type. 
+    If test data is available, it will be plotted as a second line for each model type.
+    '''
     out_dir.mkdir(parents=True, exist_ok=True)
     model_types = list((model_dirs or _model_dirs()).keys())
     x = np.arange(len(FREQ_LABELS))
@@ -100,12 +128,12 @@ def plot_summary(df, out_dir=OUT_DIR, model_dirs=None, GCN_AE_comp=False, raw_co
         for i, model_type in enumerate(model_types):
 
             if GCN_AE_comp:
-                if model_type != "path" and model_type != "basic":
-                    continue  # only plot the "basic" GCN and the path AE ensemble
+                if model_type != "path" and model_type != "peak":
+                    continue  # only plot the "peak" GCN (baseline adjacency type) and the path AE ensemble
                 label = "Path AE ensemble" if model_type == "path" else "GCN"
             elif raw_comp:
-                if model_type != "basic" and model_type != "raw":
-                    continue  # only plot the raw-feature GCN and the path AE ensemble
+                if model_type != "peak" and model_type != "raw":
+                    continue  # only plot the raw-feature GCN and the baseline "peak" GCN
                 label = "Raw features GCN" if model_type == "raw" else "GCN"
             else:
                 if model_type == "path" or model_type == "raw":
@@ -153,15 +181,31 @@ def plot_summary(df, out_dir=OUT_DIR, model_dirs=None, GCN_AE_comp=False, raw_co
 
 def main():
     df = load_summary()
+
     print(f"Loaded {len(df)} row(s) across {df['model_type'].nunique()} model type(s)")
     save_summary(df)
 
     try:
         test_df = load_summary(filename="HI_test_metrics.pkl")
         print(f"Loaded {len(test_df)} test-metric row(s) across {test_df['model_type'].nunique()} model type(s)")
+        save_summary(test_df, sheet_name="test_metrics")
     except FileNotFoundError as e:
         print(f"No HI_test_metrics.pkl found, skipping test-metric overlay: {e}")
         test_df = None
+
+    try:
+        wae_df = load_wae_summary()
+        print(f"Loaded {len(wae_df)} WAE-metric row(s) across {wae_df['model_type'].nunique()} model type(s)")
+        save_summary(wae_df, sheet_name="WAE_metrics")
+    except FileNotFoundError as e:
+        print(f"No WAE_HI_metrics.pkl found, skipping WAE sheet: {e}")
+
+    try:
+        wae_test_df = load_wae_summary(filename="WAE_HI_test_metrics.pkl")
+        print(f"Loaded {len(wae_test_df)} WAE test-metric row(s) across {wae_test_df['model_type'].nunique()} model type(s)")
+        save_summary(wae_test_df, sheet_name="WAE_test_metrics")
+    except FileNotFoundError as e:
+        print(f"No WAE_HI_test_metrics.pkl found, skipping WAE test sheet: {e}")
 
     plot_summary(df)
     plot_summary(df, GCN_AE_comp=True, test_df=test_df)
