@@ -39,19 +39,21 @@ if str(_PROJECT_ROOT) not in sys.path:
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 from ae_cross_validation_helper import ClipLayer, _CompatHeNormal, _normalization_mean_variance_axis, _predict_dataset
 from CNN_AE import KSparse, ExpandLastDim, SqueezeLastDim
 from AE_train import monotonicity_loss
 from create_datastores import prepare_datastores
 from prognostic_criteria import monotonicity_criterion, trendability_criterion, prognosability_criterion
-from config import BASE_PANELS, TEST_PANEL, TEST_RUN_DIR, DEFAULT_N_PIXELS, FREQUENCY_MAPPING, LIFETIME_FRACTIONS, METRIC_NAMES, FOLD_KEYS, AE_RESULTS_DIR
+from config import BASE_PANELS, PROJECT_ROOT, TEST_PANEL, TEST_RUN_DIR, DEFAULT_N_PIXELS, FREQUENCY_MAPPING, LIFETIME_FRACTIONS, METRIC_NAMES, FOLD_KEYS, AE_RESULTS_DIR
 
 
 BO_folders = [f"Multi_path_BO_fixed_freq{i}" for i in range(6)]
 PANELS = BASE_PANELS + TEST_PANEL        # panel axis (size 5), test panel always last
 N_PATHS = 28
 OUT_DIR = AE_RESULTS_DIR
+
 
 CUSTOM_OBJECTS = {
     "KSparse": KSparse,
@@ -142,8 +144,9 @@ def compute_sHI_and_metrics():
                         str(ensemble_path), custom_objects=CUSTOM_OBJECTS, compile=False,
                     )
                     DI = _collect_ensemble_DI(ensemble_model, ref_ds_dict, ref_norm_stats, PANELS)
+                    ensemble_fold_idx = len(FOLD_KEYS) - 1
                     for panel_idx, panel_di in enumerate(DI):
-                        sHI[4][freq_idx][panel_idx][path_i] = panel_di
+                        sHI[ensemble_fold_idx][freq_idx][panel_idx][path_i] = panel_di
 
                     Mo = monotonicity_criterion(DI)
                     Tr = trendability_criterion(DI)
@@ -279,9 +282,11 @@ def plot_sHI_grid(sHI, out_dir=OUT_DIR, weights=None):
             if not any_data:
                 ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes, fontsize=7)
             if freq_idx == 0:
-                ax.set_title(KEY_TO_TITLES.get(fold_key, fold_key), fontsize=9)
+                ax.set_title(KEY_TO_TITLES.get(fold_key, fold_key), fontsize=15)
             if fold_idx == 0:
-                ax.set_ylabel(freq_labels[freq_idx], fontsize=9)
+                ax.set_ylabel(freq_labels[freq_idx], fontsize=15)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+            ax.tick_params(axis='both', labelsize=15)
             ax.grid(True)
 
     # WAE row: for each fold, average that fold's per-panel curves over the 6 raw frequencies,
@@ -300,13 +305,15 @@ def plot_sHI_grid(sHI, out_dir=OUT_DIR, weights=None):
         if not any_data:
             ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes, fontsize=7)
         if fold_idx == 0:
-            ax.set_ylabel(freq_labels[-1], fontsize=9)
+            ax.set_ylabel(freq_labels[-1], fontsize=15)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.tick_params(axis='both', labelsize=15)
         ax.grid(True)
 
     for ax in axes[-1, :]:
-        ax.set_xlabel("Life fraction")
+        ax.set_xlabel("Life fraction", fontsize=15)
     handles, labels = axes[0, -1].get_legend_handles_labels()
-    fig.legend(handles, labels, fontsize=12, loc="lower center",
+    fig.legend(handles, labels, fontsize=15, loc="lower center",
                bbox_to_anchor=(0.5, 0.01), ncol=len(PANELS))
 
     #fig.suptitle("sHI vs life fraction, averaged over paths (one line per panel)")
@@ -337,41 +344,46 @@ def load_cached(out_dir=OUT_DIR):
 
 from graph_performance import save_HI_metrics_xlsx, _palette_style
 
-def main(recompute=True):
+def main(out_dir, recompute=True):
     from AE_damage_map_grid import plot_damage_map_grid
 
-    cached = None if recompute else load_cached()
+    cached = None if recompute else load_cached(out_dir=out_dir)
     if cached is not None:
-        print(f"Loaded cached results from {OUT_DIR}")
+        print(f"Loaded cached results from {out_dir}")
         sHI, metrics, HI_metrics, HI = cached
     else:
         sHI, metrics, HI_metrics, HI = compute_sHI_and_metrics()
 
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        with open(OUT_DIR / "sHI.pkl", "wb") as f:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "sHI.pkl", "wb") as f:
             pickle.dump(sHI, f)
-        print(f"Saved: {OUT_DIR / 'sHI.pkl'}")
+        print(f"Saved: {out_dir / 'sHI.pkl'}")
 
-        with open(OUT_DIR / "HI.pkl", "wb") as f:
+        with open(out_dir/ "HI.pkl", "wb") as f:
             pickle.dump(HI, f)
-        print(f"Saved: {OUT_DIR / 'HI.pkl'}")
+        print(f"Saved: {out_dir / 'HI.pkl'}")
 
-        np.save(OUT_DIR / "metrics.npy", metrics)
-        print(f"Saved: {OUT_DIR / 'metrics.npy'}")
+        np.save(out_dir / "metrics.npy", metrics)
+        print(f"Saved: {out_dir / 'metrics.npy'}")
 
-        np.save(OUT_DIR / "HI_metrics.npy", HI_metrics)
-        with open(OUT_DIR / "HI_metrics.pkl", "wb") as f:
+        np.save(out_dir / "HI_metrics.npy", HI_metrics)
+        with open(out_dir / "HI_metrics.pkl", "wb") as f:
             pickle.dump(HI_metrics, f)
-        print(f"Saved: {OUT_DIR / 'HI_metrics.pkl'}")
+        print(f"Saved: {out_dir / 'HI_metrics.pkl'}")
 
-        save_HI_metrics_xlsx(HI_metrics, out_dir=OUT_DIR, folders=BO_folders)
+        save_HI_metrics_xlsx(HI_metrics, out_dir=out_dir, folders=BO_folders)
 
     fitness = HI_metrics[:, :, 0]
-    WAE_weights = fitness[:, :-1] / np.nansum(fitness, axis=1, keepdims=True)
-    plot_metrics(metrics)
-    plot_sHI_grid(sHI, weights=WAE_weights)
-    plot_damage_map_grid(panel_numbers=[int(p) for p in PANELS], fractions=LIFETIME_FRACTIONS,  n_pixels=DEFAULT_N_PIXELS, sHI=sHI, save_path=str(OUT_DIR / "WCPDI_AE_damage_maps_grid.svg"))
+
+    WAE_weights = fitness[:, :-1] / np.nansum(fitness[:, :-1], axis=1, keepdims=True)
+    plot_metrics(metrics, out_dir=out_dir)
+    plot_sHI_grid(sHI,out_dir=out_dir, weights=WAE_weights)
+    plot_damage_map_grid(panel_numbers=[int(p) for p in PANELS], fractions=LIFETIME_FRACTIONS,  n_pixels=DEFAULT_N_PIXELS, sHI=sHI, save_path=str(out_dir / "WCPDI_AE_damage_maps_grid.svg"))
 
 
 if __name__ == "__main__":
-    main(recompute="--recompute" in sys.argv)
+    remaining_path_per = ["105_wo123"]
+    for panel in remaining_path_per:
+        out_dir = PROJECT_ROOT / f"test_{panel}" /"path_performance_results"
+        main(out_dir)
+    #main(recompute="--recompute" in sys.argv)
