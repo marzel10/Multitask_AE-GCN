@@ -413,7 +413,7 @@ def visualize_path(path_number):
 
     path_number : 1-indexed (1–28).
     """
-    G, _ = build_crossing_graph()
+    G, _ = build_crossing_graph(by_area=False)
     idx        = path_number - 1
     neighbours = sorted(G.neighbors(idx))
     s1_t, s2_t = SENSOR_PAIRS[idx]
@@ -487,7 +487,7 @@ def visualize_paths_pairs(path_pairs):
 
     path_pairs : list of (path_a, path_b), 1-indexed (1-28).
     """
-    _, is_crossing_matrix = build_crossing_graph()
+    _, is_crossing_matrix = build_crossing_graph(by_area=False)
 
     fig, ax = plt.subplots(figsize=(7, 9))
     _draw_panel_background(ax)
@@ -521,7 +521,7 @@ def visualize_paths_pairs(path_pairs):
 
 
 def plot_panel_schematic(impact_points=None, ax=None, title="Panel schematic",
-                         show_dims=True, save_path=None):
+                         show_dims=False, save_path=None):
     """
     Detailed panel schematic with sensors, stiffeners, disbond area and optional
     impact points — styled to sit alongside a MATLAB damage-map frame.
@@ -563,8 +563,7 @@ def plot_panel_schematic(impact_points=None, ax=None, title="Panel schematic",
         # from the x-tick labels, which give absolute position from the left edge).
         for edge_x, offset_mm in ((x_c - hw, -hw * 1000), (x_c + hw, hw * 1000)):
             ax.axvline(edge_x, color=CUSTOM_PALETTE[0], linestyle=":", linewidth=0.8, zorder=2)
-            ax.text(edge_x, PANEL_H - 0.004, f"{offset_mm:.0f}",
-                    ha="center", va="top", fontsize=6, color=CUSTOM_PALETTE[0], zorder=6)
+            
         
 
     
@@ -586,23 +585,24 @@ def plot_panel_schematic(impact_points=None, ax=None, title="Panel schematic",
             linewidth=1.5, edgecolor="black", facecolor=CUSTOM_PALETTE[1],
             alpha=0.85, zorder=3,
         ))
-        ax.text((x_min + x_max) / 2, (y_min + y_max) / 2, "S23",
-                ha="center", va="center", fontsize=7,
+        ax.text((x_min + x_max) / 2, (y_min + y_max) / 2, "23",
+                ha="center", va="center", fontsize=10,
                 color="white", fontweight="bold", zorder=4)
 
     # Sensors
     for i, (x, y) in enumerate(SENSOR_POSITIONS, start=1):
         ax.add_patch(plt.Circle((x, y), SENSOR_R, color=CUSTOM_PALETTE[0], zorder=5))
         ax.text(x, y, str(i), ha="center", va="center",
-                fontsize=8, color="white", fontweight="bold", zorder=6)
+                fontsize=10, color="white", fontweight="bold", zorder=6)
 
     # Impact points
     if impact_points:
         for label, pos_m in impact_points.items():
+            label = "0"+str(label%100)
             ax.add_patch(plt.Circle((pos_m[0], pos_m[1]), IMPACT_R,
                                     color=CUSTOM_PALETTE[1], zorder=5))
             ax.text(pos_m[0], pos_m[1], label, ha="center", va="center",
-                    fontsize=7, color="white", fontweight="bold", zorder=6)
+                    fontsize=10, color="white", fontweight="bold", zorder=6)
 
     # ── axes ──────────────────────────────────────────────────────────────
     INNER  = 0.003                              # gap inside axes limits
@@ -614,11 +614,11 @@ def plot_panel_schematic(impact_points=None, ax=None, title="Panel schematic",
     ax.invert_xaxis()
 
     ax.set_xticks(X_GRID)
-    ax.set_xticklabels([str(int(round(x * 1000))) for x in X_GRID], fontsize=7)
-    ax.set_xlabel("x (mm)", fontsize=8, labelpad=2)
+    ax.set_xticklabels([str(int(round(x * 1000))) for x in X_GRID], fontsize=15)
+    ax.set_xlabel("x (mm)", fontsize=15, labelpad=2)
     ax.set_yticks(Y_GRID)
-    ax.set_yticklabels([str(int(round(y * 1000))) for y in Y_GRID], fontsize=7)
-    ax.set_ylabel("y (mm)", fontsize=8, labelpad=2)
+    ax.set_yticklabels([str(int(round(y * 1000))) for y in Y_GRID], fontsize=15)
+    ax.set_ylabel("y (mm)", fontsize=15, labelpad=2)
     ax.tick_params(length=2, pad=2)
 
     # Dimension span annotations (optional)
@@ -630,14 +630,14 @@ def plot_panel_schematic(impact_points=None, ax=None, title="Panel schematic",
             ax.annotate("", xy=(x0, y_ann), xytext=(x1, y_ann),
                         arrowprops=ann_kw, annotation_clip=False)
             ax.text((x0 + x1) / 2, y_ann - 0.004, str(lbl),
-                    ha="center", va="top", fontsize=6, clip_on=False)
+                    ha="center", va="top", fontsize=15, clip_on=False)
 
         x_ann = PANEL_W + OUTER * 0.55
         for y0, y1, lbl in zip(Y_GRID, Y_GRID[1:], Y_DIMS):
             ax.annotate("", xy=(PANEL_W, y0), xytext=(PANEL_W, y1),
                         arrowprops=ann_kw, annotation_clip=False)
             ax.text(x_ann + 0.001, (y0 + y1) / 2, str(lbl),
-                    ha="left", va="center", fontsize=6, clip_on=False)
+                    ha="left", va="center", fontsize=15, clip_on=False)
 
 
     if standalone:
@@ -653,7 +653,7 @@ if __name__ == "__main__":
     
     impact_pts = {name: xy for name, xy in DAMAGE_POINTS.items() if name != 123}
     plot_panel_schematic(impact_points=impact_pts, title="Panel 123",
-                             save_path="panel_123_schematic.svg")
+                             save_path="panel_scheme.svg")
 
     
     fig, ax = plt.subplots(figsize=(7, 9))
@@ -666,7 +666,9 @@ if __name__ == "__main__":
     top = np.unravel_index(flat_idx, c_upper.shape)
 
     pairs = [(top[0][0]+1, top[1][0]+1), (4, find_path_index(4,5)+1),(find_path_index(8,5)+1,find_path_index(6,7)+1) ]
+    pairs = [(25,26),(19,4),(9,28)]
     visualize_paths_pairs(pairs)
+    visualize_node_subgraph_abstract([25,26,19,4,9,28])
 
     visualize_node_subgraph_abstract([top[0][0]+1, top[1][0]+1, 4, find_path_index(4,5)+1,find_path_index(8,5)+1,find_path_index(6,7)+1])
 
