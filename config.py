@@ -2,6 +2,7 @@
 Central configuration for the SHM pipeline.
 """
 
+import os
 from itertools import combinations
 from pathlib import Path
 
@@ -12,8 +13,9 @@ import numpy as np
 # ===========================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent  # .../GAN/
 
-TEST_PANEL = ["109"]  # <-- change this to make a different panel the held-out test panel
-TEST_RUN_DIR = PROJECT_ROOT / f"test_{TEST_PANEL[0]}"  # every result that depends on which panel is TEST_PANEL lives under here, so different TEST_PANEL runs never collide
+TEST_PANEL = [os.environ.get("SHM_TEST_PANEL", "103")]  # <-- change the default here, or set the SHM_TEST_PANEL env var, to make a different panel the held-out test panel
+TEST_RUN_DIR = PROJECT_ROOT / f"test_{TEST_PANEL[0]}_wo123"  # every result that depends on which panel is TEST_PANEL lives under here, so different TEST_PANEL runs never collide
+DEBUG_MODE = False
 
 # Data directories -- shared/reusable across every TEST_PANEL run, not nested under TEST_RUN_DIR
 DATA_DIR = PROJECT_ROOT / "data"                                                # raw states directory used by mat_file_path()
@@ -47,17 +49,18 @@ def mat_file_path(panel_name: str) -> Path:
 # Panels
 # ===========================================================================
 SINGLE_FILE_PANELS = ["103", "104", "105", "109"]  # panels with one whole-panel .mat file each -- "123" has no such file, only its 8 subpanel files (see PANEL_123_SUBPANELS), so this list never changes with TEST_PANEL
-ALL_BASE_PANELS = SINGLE_FILE_PANELS + ["123"]
+ALL_BASE_PANELS = SINGLE_FILE_PANELS 
 BASE_PANELS = [p for p in ALL_BASE_PANELS if p not in TEST_PANEL]  # TEST_PANEL is defined up in the Paths section, since TEST_RUN_DIR needs it first
 
 PANEL_123_SUBPANELS = ["123_1", "123_2", "123_31", "123_32", "123_41", "123_42", "123_43", "123_44"]
 
 TRAIN_PANELS = ["103", "104", "105"]                          # used only as deafult train panels in AE_train, never in the actual workflow
-VAL_PANELS = ["109"]                                          # Used by: BO.py (VAL_DS_NAMES), big_train.py (val_ds_names default), results_viz.py (val_ds_names)
+VAL_PANELS = ["103"] if TEST_PANEL[0]!="103" else ["109"]                                         # Used by: BO_AE.py for th validation inside BO , big_train.py (val_ds_names default), results_viz.py (val_ds_names)
 TEST_PANELS = PANEL_123_SUBPANELS                             # Used by: BO.py (TEST_DS_NAMES), big_train.py (test_ds_names default), results_viz.py (test_ds_names) -- all 8 "123" subpanels held out as the test set
 VAL_123_SUBPANELS = ["123_1", "123_31", "123_41", "123_43"]   # states_check.py val split (finer split: half of the 123 subpanels)
 TEST_123_SUBPANELS = ["123_2", "123_32", "123_42", "123_44"]  # states_check.py test split (finer split: the other half of the 123 subpanels)
 CV_PANELS = BASE_PANELS
+CV_PANELS_INT = [int(p) for p in CV_PANELS]
 FOLD_KEYS = BASE_PANELS + ["ensemble"]
 
 # Per-123-subpanel saved-state counts / global start offsets.
@@ -85,19 +88,22 @@ FREQUENCY_MAPPING = [50,100,125,150,200,250] # [kHz]
 # ==========================================================================
 # Sensitivity study constants
 # ==========================================================================
-TYPES = ["basic", "by_area", "geometry", "peak", "without_map_loss"]  # GCN adjacency-matrix types, same as sweep_over_options.py
+TYPES = [ "peak"]#, "geometry_only", "peak_tff", "peak_fft", "peak_tft", "peak_and_area", "peak_only"]  # GCN adjacency-matrix types, same as sweep_over_options.py
 FREQ_FOR_BETA_SWEEP = 1  
 BETAS = [25, 75, 100, 250, 500, 750, 1000, 2000, 5000]
 
-OPTIMIZED_TYPES = ["basic", "by_area", "geometry", "peak", "without_map_loss"]
+OPTIMIZED_TYPES = [ "peak", "peak_and_area", "peak_only", "geometry_only", "peak_tff", "peak_fft", "peak_tft"]  # GCN adjacency-matrix types to run the BO optimization on. The others are skipped.
+
+
+
 OPTIMIZE_RAW = True  # Whether to optimize the GCN with raw features (no AE) as well
-LIFETIME_FRACTIONS = [1.0, 0.75, 0.5, 0.25, 0]  # Used by: Damage_metric_summary.py (compare_life_fractions)
+LIFETIME_FRACTIONS = [0, 0.25, 0.5, 0.75, 1.0]  # Used by: Damage_metric_summary.py (compare_life_fractions)
 # ===========================================================================
 # Damage metric evaluation constants
 # ===========================================================================
-GCN_TYPES = ["basic", "by_area", "geometry", "peak", "wml"]
+GCN_TYPES = TYPES
 MODEL_TYPES = GCN_TYPES + ["path", "raw"]
-TYPES_LABELS = {"basic": "A&C + energy", "by_area": "Area + energy", "geometry": "A&C", "peak": "A&C + peak", "wml": "A&C + energy w/o map loss", "path": "Path AE ensemble", "raw": "Raw features GCN"}
+TYPES_LABELS = {  "peak": "CAE-GCN", "path": "CAE", "raw": "GCN", "peak_and_area": "GCN-PA", "peak_only": "GCN-P", "geometry_only": "GCN-I", "peak_tff": r"GCN-$\mathcal{L}_{loc}$", "peak_fft": r"GCN-$\mathcal{L}_{HI}$", "peak_tft": r"GCN-$\mathcal{L}_{loc}$+$\mathcal{L}_{HI}$"}
 PANELS = [int(p) for p in BASE_PANELS] + [int(TEST_PANEL[0])]
 
 DAMAGE_MAP_N_PIXELS = 40000
@@ -105,12 +111,11 @@ DAMAGE_MAP_N_PIXELS = 40000
 # ===========================================================================
 # Fitness metric evaluation constants
 # ===========================================================================
-GRAPH_TYPES = ["basic", "by_area", "geometry", "peak",  "wml", "raw"]  # GCN adjacency-matrix types, same as sweep_over_options.py
+GRAPH_TYPES = ["peak"] #[ "peak_tff", "peak_fft", "peak_tft", "peak", "peak_and_area", "peak_only", "geometry_only"]  # GCN adjacency-matrix types, same as sweep_over_options.py
 METRIC_NAMES = ["Fitness", "Mo", "Pr", "Tr"]
 METRIC_COLUMNS = ["fitness", "monotonicity", "prognosability", "trendability"]
 FREQ_LABELS = [f"{f} kHz" for f in FREQUENCY_MAPPING] + ["average"]
-GRAPH_LABELS = {"basic": "A&C + energy", "by_area": "Area + energy", "geometry": "A&C", "peak": "A&C + peak", "wml": "A&C + energy w/o map loss", "raw": "Raw features"}
-
+GRAPH_LABELS = TYPES_LABELS
 OUT_XLSX = TEST_RUN_DIR / "metrics_summary.xlsx"
 OUT_DIR = TEST_RUN_DIR / "metrics_summary_results"
 
@@ -169,6 +174,8 @@ MAX_TRIALS_GCN = 30
 CNN_FIXED_LATENT_DIM = 24
 DAMAGE_LOSS_WEIGHT = 0.01  # small fixed weight; damage_map_loss is unbounded, fitness is ~0-3 -- check magnitudes and adjust. Used by: BO.py, GCN_train.py
 ENABLE_DAMAGE_LOSS = True  # Whether to include the damage_map_loss term in the GCN's loss function. Used by: BO.py, GCN_train.py
+ENABLE_PATH_LOSS = True
+ENABLE_GLOBAL_LOSS = True  # Whether to include the global_loss term in the GCN's loss function. Used by: BO.py, GCN_train.py
 # ===========================================================================
 # Colormaps
 # ===========================================================================
@@ -177,8 +184,11 @@ CMAP_SEQUENTIAL = "viridis"   # damage_map.py, weight_matrix.py, visualize_cross
 CMAP_DIVERGING = "plasma"     # plot_panel.py, damage_map.py
 CMAP_BLUES = "Blues"          # visualize_crossing_graph.py, weight_matrix.py
 
-# Paper colormap
-palette_rgb = [(21, 96, 130), (233, 113, 50), (166, 202, 236)]
+palette_rgb = [
+    (21, 96, 130), (233, 113, 50), (166, 202, 236),   # dark teal-blue, orange, light blue (original)
+    (10, 61, 82), (166, 78, 31),                       # navy, burnt orange (darker shades)
+    (120, 168, 178), (247, 178, 120),                  # steel teal, peach (mid/light tints)
+    (90, 130, 90),                                     # muted sage accent
+]
 CUSTOM_PALETTE = [(r / 255, g / 255, b / 255) for r, g, b in palette_rgb]
-_LINESTYLES = ["-", "--", ":", "-."]
 
