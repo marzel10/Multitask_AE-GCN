@@ -1,35 +1,21 @@
 '''
-Summarizes the Bayesian-optimized GCN hyperparameters across frequencies, parsed from
-the best_trial_details.txt that BO_GCN.py's run_bayesian_optimization writes into each
-Bayesian_GCN_freq{N}/ folder.
+Summarizes the pre-processed-features GCN's Bayesian-optimized hyperparameters across
+every test panel, read from
+TEST_RUN_DIR/"results"/f"best_hyperparameters_freq{freq}{beta_suffix}_pre_processed.json"
+across all 4 test_{panel}_wo123 runs (BO_GCN.py's run_bayesian_optimization, raw_features=False,
+type="peak").
 
-best_trial_details.txt has one plain-text line per field, e.g.:
-    Optimization time 0 days 00:30:38.441542
-    Trial ID: 28
-    Objective: 23.313475868662096
-    Hyperparameters: {'nr_hidden_channels': 0, 'hidden_dim': 8, 'dropout': 0.2, 'batch_size': 32, 'learning_rate': 0.00013626331785482134}
-    Final mean_fitness: 2.424689781625961
-    Final mean_damage_loss: -2088.8786087036133
-    Final mean_train_loss: -3334.312505086263
-    Final mean_val_loss: -4915.289154052734
-
-Plots, one per hyperparameter, frequency index on the x-axis (one point per
-frequency -- GCN trains one model across all paths jointly, so there's no per-path
-axis the way AE_hyperparameters_summary.py has):
+Plots, one per hyperparameter, frequency index on the x-axis, one colored series per test
+panel (up to 4 points per frequency):
     - nr_hidden_channels
     - hidden_dim
     - dropout
     - batch_size
     - learning_rate
-and one per best-trial outcome metric:
-    - Objective
-    - mean_fitness
-    - mean_damage_loss
-    - mean_train_loss
-    - mean_val_loss
 
+Panel/frequency combos whose json doesn't exist yet are skipped rather than erroring.
 '''
-import ast
+import json
 import sys
 from pathlib import Path
 
@@ -45,13 +31,23 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import pandas as pd
 
-from config import BO_SEARCH_RESULTS_DIR, PROJECT_ROOT, TEST_RUN_DIR
+from config import PROJECT_ROOT, CUSTOM_PALETTE
+from Damage_metric_summary import PANEL_LABELS
 
+TEST_PANELS = ["103", "104", "105", "109"]
 FREQS = range(0, 6)
-FOLDERS = [f"Bayesian_GCN_freq{freq}" for freq in FREQS]
-OUT_DIR = TEST_RUN_DIR / "GCN_hyperparameters_summary_results"
+BETA_SUFFIX = ""
+OUT_DIR = PROJECT_ROOT / "GCN_hyperparameters_summary_results"
 
-# (key, plot title / y-axis label)
+_MARKERS = ["o", "s", "^", "D"]
+
+
+def _palette_style(i):
+    color = CUSTOM_PALETTE[i % len(CUSTOM_PALETTE)]
+    marker = _MARKERS[(i // len(CUSTOM_PALETTE)) % len(_MARKERS)]
+    return color, marker
+
+
 HP_PLOTS = [
     ("nr_hidden_channels", "Optimal nr_hidden_channels"),
     ("hidden_dim", "Optimal hidden_dim"),
@@ -59,102 +55,105 @@ HP_PLOTS = [
     ("batch_size", "Optimal batch_size"),
     ("learning_rate", "Optimal learning_rate"),
 ]
-METRIC_PLOTS = [
-    ("Objective", "Best-trial Objective"),
-    ("mean_fitness", "Best-trial mean_fitness"),
-    ("mean_damage_loss", "Best-trial mean_damage_loss"),
-    ("mean_train_loss", "Best-trial mean_train_loss"),
-    ("mean_val_loss", "Best-trial mean_val_loss"),
-]
 
 
-def _parse_best_trial_details(txt_path):
-    row = {}
-    for line in txt_path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("Optimization time "):
-            row["optimization_time"] = line[len("Optimization time "):]
-        elif line.startswith("Trial ID:"):
-            row["trial_id"] = int(line.split(":", 1)[1].strip())
-        elif line.startswith("Objective:"):
-            row["Objective"] = float(line.split(":", 1)[1].strip())
-        elif line.startswith("Hyperparameters:"):
-            hp = ast.literal_eval(line.split(":", 1)[1].strip())
-            row.update(hp)
-        elif line.startswith("Final "):
-            key, value = line[len("Final "):].split(":", 1)
-            row[key.strip()] = float(value.strip())
-    return row
-
-
-def load_all_trials(folders=FOLDERS, root=BO_SEARCH_RESULTS_DIR):
-    '''One row per frequency folder's best_trial_details.txt, tagged with its frequency_index.'''
+def load_best_params(panels=TEST_PANELS, freqs=FREQS, beta_suffix=BETA_SUFFIX, raw=False):
     rows = []
-    for freq, folder in zip(FREQS, folders):
-        txt_path = root / folder / "best_trial_details.txt"
-        if not txt_path.exists():
-            print(f"[{folder}] no best_trial_details.txt, skipping")
-            continue
-        row = _parse_best_trial_details(txt_path)
-        row["frequency_index"] = freq
-        row["source_folder"] = folder
-        rows.append(row)
-        print(f"[{folder}] loaded best trial (trial_id={row.get('trial_id')})")
+    for panel in panels:
+        root = PROJECT_ROOT / f"test_{panel}_wo123"
+        for freq in freqs:
+            if raw:
+                json_path = root / "results" / f"best_hyperparameters_freq{freq}{beta_suffix}.json"
+            else:
+                json_path = root / "results" / f"best_hyperparameters_freq{freq}{beta_suffix}_pre_processed.json"
+            if not json_path.exists():
+                print(f"[panel {panel}, freq {freq}] no best_hyperparameters json, skipping")
+                continue
+            with open(json_path) as f:
+                params = json.load(f)
+            row = {"panel": panel, "frequency_index": freq, **params}
+            rows.append(row)
+            print(f"[panel {panel}, freq {freq}] loaded best_hyperparameters json")
 
     if not rows:
-        raise FileNotFoundError(f"No best_trial_details.txt found in any of {folders} (looked under {root})")
+        raise FileNotFoundError(f"No best_hyperparameters_*_pre_processed.json found for any of {panels} x {list(freqs)}")
 
     return pd.DataFrame(rows)
 
 
-def _plot_vs_frequency(df, columns, out_dir, file_prefix):
+def plot_hp_vs_frequency(df, out_dir=OUT_DIR, raw=False):
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for col, title in columns:
+    panels = [p for p in TEST_PANELS if p in set(df["panel"])]
+
+    for col, title in HP_PLOTS:
         if col not in df.columns:
-            print(f"[{col}] column missing from every loaded trial, skipping plot")
+            print(f"[{col}] column missing from every loaded best_hyperparameters json, skipping plot")
             continue
-        sub = df.dropna(subset=[col, "frequency_index"]).sort_values("frequency_index")
+        sub = df.dropna(subset=[col, "frequency_index", "panel"])
         if sub.empty:
             print(f"[{col}] no non-null rows, skipping plot")
             continue
 
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(sub["frequency_index"], sub[col], "o-", color="tab:blue")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        any_series = False
+        for i, panel in enumerate(panels):
+            panel_rows = sub[sub["panel"] == panel].sort_values("frequency_index")
+            if panel_rows.empty:
+                continue
+            color, marker = _palette_style(i)
+            ax.plot(panel_rows["frequency_index"], panel_rows[col], marker=marker, linestyle="None",
+                    color=color, label=f"{PANEL_LABELS.get(panel, f'panel {panel}')}")
+            any_series = True
+        if not any_series:
+            plt.close(fig)
+            continue
 
-        ax.set_xlabel("Frequency index")
-        ax.set_ylabel(title)
-        ax.set_title(f"{title} vs Frequency")
+        ax.set_xlabel("Frequency index", fontsize=15)
+        ax.set_ylabel(title, fontsize=15)
+
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.legend(title="Test panel", fontsize=14, title_fontsize=15, loc="best")
         ax.grid(True)
         fig.tight_layout()
-        save_path = out_dir / f"{file_prefix}_{col}.svg"
+        if raw:
+            save_path = out_dir / f"GCN_hp_summary_{col}_raw.svg"
+        else:
+            save_path = out_dir / f"GCN_hp_summary_{col}.svg"
         fig.savefig(save_path)
         plt.close(fig)
         print(f"Saved: {save_path}")
 
 
-def plot_hp_vs_freq(df, out_dir=OUT_DIR):
-    _plot_vs_frequency(df, HP_PLOTS, out_dir, "GCN_hp_summary")
 
-
-def plot_metrics_vs_freq(df, out_dir=OUT_DIR):
-    _plot_vs_frequency(df, METRIC_PLOTS, out_dir, "GCN_metric_summary")
-
-def make_table_summary(df, out_dir=OUT_DIR):
+def save_hp_summary_xlsx(df, out_dir=OUT_DIR, raw=False):
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = out_dir / "GCN_hyperparameters_summary.csv"
-    df.to_csv(summary_path, index=False)
-    print(f"Saved: {summary_path}")
+    if raw:
+        save_path = out_dir / "GCN_hp_summary_raw.xlsx"
+    else:
+        save_path = out_dir / "GCN_hp_summary.xlsx"
+    with pd.ExcelWriter(save_path) as writer:
+        for col, title in HP_PLOTS:
+            if col not in df.columns:
+                print(f"[{col}] column missing from every loaded best_hyperparameters json, skipping sheet")
+                continue
+            sub = df.dropna(subset=[col, "frequency_index", "panel"])
+            if sub.empty:
+                print(f"[{col}] no non-null rows, skipping sheet")
+                continue
+            sub.to_excel(writer, sheet_name=col, index=False)
+    print(f"Saved: {save_path}")
+
 
 def main():
-    df = load_all_trials()
-    print(f"Loaded {len(df)} row(s) total from {df['source_folder'].nunique()} folder(s)")
-    plot_hp_vs_freq(df)
-    plot_metrics_vs_freq(df)
-    make_table_summary(df)
+    df = load_best_params()
+    df_raw = load_best_params(raw=True)
+    print(f"Loaded {len(df)} row(s) total across {df['panel'].nunique()} test panel(s)")
+    print(f"Loaded {len(df_raw)} row(s) total across {df_raw['panel'].nunique()} test panel(s)")
+    plot_hp_vs_frequency(df)
+    save_hp_summary_xlsx(df)
+    plot_hp_vs_frequency(df_raw, raw=True)
+    save_hp_summary_xlsx(df_raw, raw=True)
 
 
 if __name__ == "__main__":
