@@ -67,9 +67,6 @@ def plot_damage_map_grid(panel_numbers=None, fractions=(0.0, 0.25, 0.5, 0.75, 1.
     X, Y = np.meshgrid(x, y, indexing='ij')
     grid = (X, Y)
 
-    U_arr = np.zeros_like(X)
-    U(U_arr, grid)
-
     n_rows, n_cols = len(panel_numbers), len(fractions)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows), squeeze=False)
 
@@ -79,9 +76,12 @@ def plot_damage_map_grid(panel_numbers=None, fractions=(0.0, 0.25, 0.5, 0.75, 1.
             ax = axes[row][col]
             state = int(round(fraction * (n_states - 1)))
 
+            U_arr = np.zeros_like(X)
+            U(U_arr, grid, panel_number=int(panel_number), state=state)
+
             P_arr = np.zeros_like(X)
             sHI_per_state = [curve[state] for curve in sHI_avg]
-            P_AE(P_arr, grid, sHI_per_state)
+            P_AE(P_arr, grid, sHI_per_state, panel_number=int(panel_number), state=state)
             wcpdi_map = WCPDI(P_arr, U_arr)
 
             _draw_static_panel(ax, int(panel_number))
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     sHI_per_state = [curve[0] for curve in sHI_avg]  # state 0, one sHI value per path
 
     P_values = np.zeros((len(x), len(y)))
-    P_AE(P_values, grid, sHI_per_state)
+    P_AE(P_values, grid, sHI_per_state, panel_number=panel_number, state=0)
 
     plt.figure(figsize=(6, 8))
     plt.imshow(P_values.T, extent=(0, PANEL_W, 0, PANEL_H), origin='lower', cmap=CMAP_HEATMAP)
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     plt.tight_layout()
 
     U_values = np.zeros((len(x), len(y)))
-    U(U_values, grid)
+    U(U_values, grid, panel_number=panel_number, state=0)
 
     plt.figure(figsize=(6, 8))
     plt.imshow(U_values.T, extent=(0, PANEL_W, 0, PANEL_H), origin='lower', cmap=CMAP_HEATMAP)
