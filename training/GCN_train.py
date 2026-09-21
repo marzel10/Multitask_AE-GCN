@@ -57,7 +57,7 @@ def monotonicity_loss(values, state_ids, panel_ids):
 
         diff = sorted_values[1:] - sorted_values[:-1]
         diff = diff[adjacent]
-        loss = loss + (((diff + 10.0) ** 2) - 100.0).sum()
+        loss = loss + (((diff + 10.0) ** 2) - 100.0).mean(dim=1).sum() # mean over number of paths dimmension to make the value closer to the global loss
     return loss
 
 def combined_path_loss(HI, out, state_ids, panel_ids):
@@ -195,6 +195,7 @@ def plot_training_history(hist_dict, nr_epochs,save_dir=None):
         plt.savefig(save_dir)
     else:
         plt.show()
+    plt.close(fig)
 
 
 
@@ -374,7 +375,7 @@ def build_and_save_ensemble(model_path, save_path):
     return ensemble
 
 
-def ensemble_predict(datasets, test_dataset, model_path, save_dir=None):
+def ensemble_predict(datasets, test_dataset, model_path, save_dir=None, datasets_by_fold=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     all_datasets = datasets + [test_dataset]
     n = len(all_datasets)
@@ -392,11 +393,18 @@ def ensemble_predict(datasets, test_dataset, model_path, save_dir=None):
         feature_std = checkpoint['feature_std']
         model.eval()
 
+        #Once traing the model on CAE latent space, each val. fold is extracting different latent spaces, so only datasets corresponfing to the given fold are taken into account 
+        fold = checkpoint.get('fold')
+        if datasets_by_fold is not None and fold in datasets_by_fold:
+            model_datasets = datasets_by_fold[fold]
+        else:
+            model_datasets = all_datasets
+
         def norm_transform(data, mean=feature_mean, std=feature_std):
             data.x = (data.x - mean) / std
             return data
 
-        for i, dataset in enumerate(all_datasets):
+        for i, dataset in enumerate(model_datasets):
             dataset.transform = norm_transform
             loader = torch_geometric.loader.DataLoader(dataset, batch_size=15, shuffle=False)
             batch_HI, batch_states = [], []
@@ -434,6 +442,7 @@ def ensemble_predict(datasets, test_dataset, model_path, save_dir=None):
         plt.savefig(save_dir)
     else:
         plt.show()
+    plt.close(fig)
 
 def plot_HI(model, train_datasets, validation_datasets, test_datasets, save_dir=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -505,6 +514,7 @@ def plot_HI(model, train_datasets, validation_datasets, test_datasets, save_dir=
         plt.savefig(save_dir)
     else:
         plt.show()
+    plt.close(fig)
 
 def plot_sHI(model, dataset, path_idx):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
