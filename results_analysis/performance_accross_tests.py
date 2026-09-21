@@ -4,8 +4,7 @@ This files uses results written by path_performance.py and graph_performance.py
 
 Every function here only reads cached artifacts (HI.pkl, HI_metrics.pkl,
 HI_test_metrics.pkl, WAE_HI_metrics.pkl, WAE_HI_test_metrics.pkl, damage_maps.pkl,
-sHI.pkl, and damage_loss_evaluation_results/damage_metrics_*.pkl) -- no model is ever
-reloaded. 
+and sHI.pkl) -- no model is ever reloaded.
 '''
 import pickle
 import sys

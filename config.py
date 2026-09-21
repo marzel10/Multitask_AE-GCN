@@ -29,7 +29,6 @@ BO_SEARCH_RESULTS_DIR = TEST_RUN_DIR / "results"                                
 AE_RESULTS_DIR = TEST_RUN_DIR / "path_performance_results"                      # Written by: path_performance.py, summary plots and HI and metrics arrays are saved there.
 GCN_RESULTS_DIR = TEST_RUN_DIR / "graph_performance_results_basic"              # Written by: graph_performance.py, summary plots and HI and metrics arrays are saved there.
 BETA_SWEEP_RESULTS_DIR = TEST_RUN_DIR / "graph_performance_results_beta_sweep"  # Written by: graph_performance_beta_sweep.py, summary plots and HI and metrics arrays are saved there.
-COMPARE_OUT_DIR = TEST_RUN_DIR / "damage_loss_evaluation_results"               # Written by: Damage_metric_summary.py, summary plots and metrics arrays are saved there.
 # Other used in main workflow but  particularly relevant
 MODEL_DATABASE_XLSX_FEATURES = TEST_RUN_DIR / "model_database_features.xlsx"    # Path to the AE model database
 BO_TUNER_DIR = TEST_RUN_DIR / "tuner_dir"                                       # keras-tuner scratch dir.
@@ -97,7 +96,7 @@ OPTIMIZED_TYPES = [ "peak", "peak_and_area", "peak_only", "geometry_only", "peak
 
 
 OPTIMIZE_RAW = True  # Whether to optimize the GCN with raw features (no AE) as well
-LIFETIME_FRACTIONS = [0, 0.25, 0.5, 0.75, 1.0]  # Used by: Damage_metric_summary.py (compare_life_fractions)
+LIFETIME_FRACTIONS = [0, 0.25, 0.5, 0.75, 1.0]  # Used by: performance_accross_tests.py, L1_23_performance_evaluation.py
 # ===========================================================================
 # Damage metric evaluation constants
 # ===========================================================================
@@ -105,6 +104,7 @@ GCN_TYPES = TYPES
 MODEL_TYPES = GCN_TYPES + ["path", "raw"]
 TYPES_LABELS = {  "peak": "CAE-GCN", "path": "CAE", "raw": "GCN", "peak_and_area": "GCN-PA", "peak_only": "GCN-P", "geometry_only": "GCN-I", "peak_tff": r"GCN-$\mathcal{L}_{loc}$", "peak_fft": r"GCN-$\mathcal{L}_{HI}$", "peak_tft": r"GCN-$\mathcal{L}_{loc}$+$\mathcal{L}_{HI}$"}
 PANELS = [int(p) for p in BASE_PANELS] + [int(TEST_PANEL[0])]
+PANEL_LABELS = {"103": "L1-03", "104": "L1-04", "105": "L1-05", "109": "L1-09", "123": "L1-23"}  # Used by: AE_hyperparameters_summary.py, GCN_hyperparameters_summary.py (keyed by panel-name string)
 
 DAMAGE_MAP_N_PIXELS = 40000
 

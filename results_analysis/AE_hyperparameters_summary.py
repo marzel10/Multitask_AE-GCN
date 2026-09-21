@@ -32,8 +32,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import pandas as pd
 
-from config import PROJECT_ROOT, CNN_FIXED_LATENT_DIM, CUSTOM_PALETTE
-from Damage_metric_summary import PANEL_LABELS
+from config import PROJECT_ROOT, CNN_FIXED_LATENT_DIM, CUSTOM_PALETTE, PANEL_LABELS
 TEST_PANELS = ["103", "104", "105", "109"]  # each has its own test_{panel}_wo123 run (that panel held out as TEST_PANEL)
 FREQS = range(0, 6)
 OUT_DIR = PROJECT_ROOT / "AE_hyperparameters_summary_results"

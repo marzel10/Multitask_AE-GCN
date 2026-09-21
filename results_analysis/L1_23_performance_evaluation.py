@@ -53,7 +53,6 @@ from graph_dataset import Panel_GraphDataset, features_GraphDataset
 from extract_shi import extract_shi
 from create_datastores import prepare_datastores
 from path_performance import _collect_ensemble_DI, CUSTOM_OBJECTS as AE_CUSTOM_OBJECTS
-from Damage_metric_summary import damage_vs_mean_per_state
 from performance_accross_tests import _normalize_maps
 from imagining_alghoritm import P_AE, U, WCPDI
 from plot_panel import _draw_static_panel
