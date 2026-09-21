@@ -1,6 +1,6 @@
-# Multitask AE-GCN for HI extraction and damge detection 
+# Multitask AE-GCN for HI extraction and damage detection 
 
-Structural health monitoring pipeline for deteecting damage and extracting HI for composite panels: raw GW signal data is turned
+Structural health monitoring pipeline for detecting damage and extracting HI for composite panels: raw GW signal data is turned
 into per-path health indices (sHI) via autoencoders and/or a graph convolutional
 network (GCN), combined into a WCPDI damage map on the panel, and scored with
 prognostic-criteria metrics (monotonicity, trendability, prognosability).
@@ -8,7 +8,22 @@ prognostic-criteria metrics (monotonicity, trendability, prognosability).
 `config.py` at the project root is the single source of truth for paths, panel/sensor
 constants, and shared plot styling — nearly every other file imports from it.
 
-`run_serial.py` contains complete project workflow to regenrate projects results 
+## Running the workflow
+
+The held-out test panel is chosen with the `SHM_TEST_PANEL` environment variable (default `103`, see
+`config.py`). Everything that depends on it is written under `test_<panel>_wo123/` (`TEST_RUN_DIR`), so
+runs for different test panels never collide.
+
+- `run_cross_test.py` (project root) is the entry point for regenerating the results. Set its `PANELS` list
+  (and optional `START_FREQ` resume points) and it launches `training/run_single_panel_serial.py` in a
+  fresh process for each test panel.
+- `training/run_single_panel_serial.py <panel> [start_freq]` runs the whole per-panel pipeline, in order:
+  AE Bayesian optimization (`BO_AE.py`) → AE performance (`path_performance.py`) → AE sHI extraction
+  (`extract_shi.py`) → CAE-GCN sweep → raw-feature extraction (`features_extractor.py`) → raw-feature GCN
+  sweep → test-panel fitness metrics → WAE metrics → metrics summary.
+- Once every panel has run, `results_analysis/performance_accross_tests.py` (summary across test panels) and
+  `results_analysis/L1_23_performance_evaluation.py` (evaluation on the unseen L1-23 damage) produce the
+  cross-panel figures and tables.
 
 ## Source folders
 
@@ -50,22 +65,24 @@ autoencoder and GCN models, plus cross-validation and sensitivity-study helpers.
 - `BO_AE.py` — Runs Bayesian hyperparameter optimization for the fc_AE and CNN_AE autoencoders trained on time-frequency features, optionally comparing both architectures side by side.
 - `BO_GCN.py` — Runs Bayesian hyperparameter optimization for `DeepGraphCNN` via leave-one-out cross-validation, then retrains and saves an ensemble model with diagnostic plots.
 - `GCN_train.py` — Defines the GCN training loop, including the monotonicity loss, model/dataset setup, and a `plot_HI` visualization of learned health index vs. state.
-- `sensitivity_study.py` — Sweeps GCN Bayesian optimization and downstream summary scripts across frequencies/graph types/betas, timing and orchestrating each run.
+- `sensitivity_study.py` — Sweeps `BO_GCN.py`'s Bayesian optimization across frequencies for the CAE-GCN (`run_pre_processed_sweep`), raw-feature GCN (`run_raw_sweep`) and the other adjacency/loss GCN types (`run_types_sweep`), each followed by `graph_performance.py` on the results.
+- `run_single_panel_serial.py` — Worker that runs the full per-panel pipeline (AE, CAE-GCN, GCN, metrics) for one test panel given on the command line; launched once per panel by `run_cross_test.py`.
 
 ### `results_analysis/`
 Standalone analysis/plotting entry points that load cached training/BO results and
 produce the summary figures and tables (hyperparameters, fitness metrics, damage maps,
 sHI curves).
 
-- `AE_hyperparameters_summary.py` — Aggregates `BO_AE.py`'s per-path `model_database.xlsx` files across frequencies and plots each AE hyperparameter (k_sparse, filters, batch_size) vs. path.
-- `GCN_hyperparameters_summary.py` — Parses `BO_GCN.py`'s `best_trial_details.txt` per frequency and plots each GCN hyperparameter and best-trial outcome metric vs. frequency.
+- `AE_hyperparameters_summary.py` — Reads `BO_AE.py`'s per-frequency `best_params.json` (path 0's Bayesian search) for every test panel and plots each AE hyperparameter vs. frequency, one series per test panel.
+- `GCN_hyperparameters_summary.py` — Reads `BO_GCN.py`'s `best_hyperparameters_freq{N}_pre_processed.json` for every test panel and plots each GCN hyperparameter (hidden channels, hidden dim, dropout, batch size, learning rate) vs. frequency, one series per test panel.
 - `AE_damage_map_grid.py` — Generates a heatmap of the WCPDI damage map on the panel using autoencoder-derived sHI values.
 - `Fitness_summary.py` — Averages the frequency x path x metric arrays from `graph_performance.py` and `path_performance.py` across paths, writing a model-type/frequency fitness table and plots.
 - `Compute_WAE.py` — Computes the Weighted Average Ensemble health index and its prognostic metrics across model directories and saves/appends the results.
 - `Fitness_test_metrics.py` — Computes prognostic-criteria metrics restricted to the held-out test panel for each model directory's cached HI data.
 - `graph_performance.py` — Runs the full GCN-based HI/damage-map/prognostic-metric analysis (sHI grid, WCPDI damage maps, per-path metric plots) over the per-frequency GCN Bayesian-optimization results.
-- `graph_performance_beta_sweep.py` — Same analysis as `graph_performance.py` but swept over the adjacency-construction `BETA_CONSTANT` values.
 - `path_performance.py` — Aggregates the six per-path-per-frequency AE Bayesian-optimization folders into fold x frequency x panel x path sHI arrays, computes prognostic metrics, and plots sHI/damage-map grids.
+- `performance_accross_tests.py` — Reads the cached results of all four test-panel runs (`HI.pkl`, metrics, WAE, damage maps, sHI) and produces the cross-test-panel summary: HI grids, HI-metrics xlsx, damage-map grids, fitness vs. frequency, and WAE fitness vs. GCN type. No model is reloaded.
+- `L1_23_performance_evaluation.py` — Evaluates each leave-one-out test-panel model (CAE, GCN, CAE-GCN) on the unseen-damage panel 123 (L1-23): WAE HI curves, prognostic-criteria test metrics, and WCPDI damage-map grids. Intermediate results are cached in `L1_23_results_analysis/`.
 
 ### `intermediate_results_check/`
 Ad-hoc diagnostic/inspection scripts for sanity-checking data and models mid-pipeline —
@@ -75,30 +92,43 @@ not part of the main result-generating flow above.
 - `plot_sHI.py` — Loads a saved autoencoder cross-validation ensemble model and plots its sHI predictions for one panel.
 - `inspect_connections.py` — Visualizes path/graph connectivity: the geometric connection matrix, weighted adjacency, subgraphs, path pairs, and panel schematic.
 - `inspect_field_of_influance.py` — Plots the elliptical "field of influence" of one or more sensor paths based on `imagining_alghoritm.py`'s weighting function `U`.
+- `inspect_latent_zeros.py` — Reports, per latent position, how many entries are exactly zero and the value range/mean/std across the cached AE-latent files, as a sanity check of the K-sparse latent code.
+- `inspect_raw_feature_stats.py` — Same statistics as `inspect_latent_zeros.py` but for the raw features, to check the latent-space extraction against them.
+- `inspect_sHI_stats.py` — Same accumulation as `inspect_latent_zeros.py`, keyed by path/state, on the cached `shi` arrays.
+- `plot_envelope_peak_area.py` — Plots one signal's Hilbert envelope with the peak lobe shaded, as a cross-check of `states.py`'s `signal_envelope_peak_area`.
 
 ## Output / generated folders
 
 These are all produced by running the scripts above — none are checked in as source,
 and most can be regenerated by rerunning the corresponding script.
 
+### Per-test-panel folders (inside `test_<panel>_wo123/`)
+
+| Folder / file | Contents |
+|---|---|
+| `Multi_path_BO_fixed_freq0` … `freq5` | Per-frequency AE Bayesian-optimization output from `BO_AE.py`: one `Bayesian_CNN_AE_path{0..27}/` subfolder per path, each with fold models, an ensemble model, and a `model_database.xlsx`. Each frequency folder also holds a `*_best_params.json` with the hyperparameters found by the search on path 0, shared by all paths. |
+| `results` | GCN Bayesian-optimization output from `BO_GCN.py`: `Bayesian_GCN_{peak,raw,<type>}_freq{N}/` subfolders (one per model type and frequency) plus `best_hyperparameters_freq{N}_*.json`. |
+| `graph_performance_results_<type>` | `graph_performance.py`'s cached HI/metrics/damage-map results, one folder per GCN type (`basic`, `peak`, `raw`, `geometry_only`, `peak_only`, `peak_and_area`, `peak_fft`, `peak_tff`, `peak_tft`). |
+| `path_performance_results` | `path_performance.py`'s cached sHI/metrics/damage-map results for the per-path AE ensemble. |
+| `metrics_summary_results`, `metrics_summary.xlsx` | `Fitness_summary.py`'s cross-model-type fitness comparison plots/table. |
+| `graph_data` | PyTorch-Geometric dataset root (raw/processed), written and read by `graph_dataset.py`, `GCN_train.py`, `imagining_alghoritm.py`, and `extract_shi.py`. |
+| `model_database_features.xlsx` | Appended to by `AE_train.py`'s `model_train_features`; a running log of every trained AE model's hyperparameters and results. |
+| `tuner_dir` | keras-tuner scratch directory used during `BO_AE.py`'s search. |
+
+### Shared / cross-panel folders (project root)
+
 | Folder | Contents |
 |---|---|
-| `Multi_path_BO_fixed_freq0` … `freq5` | Per-frequency AE Bayesian-optimization output from `BO_AE.py`: one `Bayesian_CNN_AE_path{0..27}/` subfolder per path, each with fold models, an ensemble model, and a `model_database.xlsx`. |
-| `results` | GCN Bayesian-optimization search output from `BO_GCN.py` (`Bayesian_GCN_freq{N}/` etc. subfolders, one per sweep configuration). |
-| `graph_performance_results_basic` / `_by_area` / `_geometry` / `_peak` / `_raw` / `_wml` | `graph_performance.py`'s cached HI/metrics/damage-map results, one folder per GCN adjacency-matrix type. |
-| `graph_performance_results_beta_sweep` / `_by_area_beta_sweep` | `graph_performance_beta_sweep.py`'s results, swept over `BETA_CONSTANT`. |
-| `path_performance_results` | `path_performance.py`'s cached sHI/metrics/damage-map results for the per-path AE ensemble. |
-| `metrics_summary_results` | `Fitness_summary.py`'s cross-model-type fitness comparison plots/table. |
-| `AE_hyperparameters_summary_results` | `AE_hyperparameters_summary.py`'s hyperparameter-vs-path plots. |
+| `features_cache` | Cached per-panel extracted features, written by `features_extractor.py`; independent of the test panel, so shared by every run. |
+| `test_panel_performance_results` | `performance_accross_tests.py`'s cross-test-panel figures and tables. |
+| `L1_23_results_analysis` | `L1_23_performance_evaluation.py`'s plots, xlsx table, and per-panel result caches. |
+| `AE_hyperparameters_summary_results` | `AE_hyperparameters_summary.py`'s hyperparameter-vs-frequency plots. |
 | `GCN_hyperparameters_summary_results` | `GCN_hyperparameters_summary.py`'s hyperparameter-vs-frequency plots. |
-| `graph_data` | PyTorch-Geometric dataset root (raw/processed), written and read by `graph_dataset.py`, `GCN_train.py`, `imagining_alghoritm.py`, and `extract_shi.py`. |
-| `features_cache` | Cached per-panel extracted features, written by `features_extractor.py`. |
-| `tuner_dir` | keras-tuner scratch directory used during `BO_AE.py`'s search. |
 | `__pycache__` | Python bytecode cache — not real content, safe to delete anytime. |
 
 ## Top-level files
 
 - `config.py` — Central configuration: paths, panel/sensor constants, shared plot palette. Owned by nothing else; owns everything else.
-- `model_database_features.xlsx` — Appended to by `AE_train.py`'s `model_train_features`; a running log of every trained AE model's hyperparameters and results.
-- `types_metrics_summary.xlsx`, `progress_logger.txt` — Stray files with no current script writing or reading them.
+- `run_cross_test.py` — Entry point that runs `training/run_single_panel_serial.py` for every test panel (see "Running the workflow").
+- `progress_logger.txt` — Stray file with no current script writing or reading it.
 
