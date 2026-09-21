@@ -1,4 +1,4 @@
-# Multitask AE-GCN for HI extraction and damage detection 
+# Multitask CAE-GCN for HI extraction and damage detection 
 
 Structural health monitoring pipeline for detecting damage and extracting HI for composite panels: raw GW signal data is turned
 into per-path health indices (sHI) via autoencoders and/or a graph convolutional
